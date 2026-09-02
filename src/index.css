@@ -8,8 +8,15 @@
   #root {
     height: 100%;
   }
+  html {
+    /* Tells the browser to render native controls (select popups,
+       scrollbars, etc.) with dark-mode defaults instead of light-on-light
+       or forcing us to hand-color every <option>. */
+    color-scheme: dark;
+  }
   body {
     font-family: "Montserrat", ui-sans-serif, system-ui, -apple-system, sans-serif;
     letter-spacing: -0.006em;
+    background-color: #020617; /* slate-950, avoids a white flash before React mounts */
   }
 }

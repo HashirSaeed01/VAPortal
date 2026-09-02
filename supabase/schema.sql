@@ -14,9 +14,17 @@ create table if not exists public.tasks (
   start_date  text default '',
   status      text not null default 'To Start',
   notes       text default '',
+  reported_by text default '',
+  assigned_to text default '',
+  priority    boolean not null default false,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+
+-- 1b) Patch columns onto an already-existing table (safe to re-run)
+alter table public.tasks add column if not exists reported_by text default '';
+alter table public.tasks add column if not exists assigned_to text default '';
+alter table public.tasks add column if not exists priority boolean not null default false;
 
 -- 2) Keep updated_at current on every update
 create or replace function public.set_updated_at()
@@ -54,5 +62,173 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tasks'
   ) then
     alter publication supabase_realtime add table public.tasks;
+  end if;
+end $$;
+
+-- ============================================================
+-- 5) Contacts — contractors/vendors tied to a property (name, role,
+--    phone, email). Shown on the property's task view in the app.
+-- ============================================================
+create table if not exists public.contacts (
+  id          uuid primary key default gen_random_uuid(),
+  property    text not null,
+  name        text not null,
+  role        text default '',
+  phone       text default '',
+  email       text default '',
+  notes       text default '',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists contacts_set_updated_at on public.contacts;
+create trigger contacts_set_updated_at
+  before update on public.contacts
+  for each row execute function public.set_updated_at();
+
+alter table public.contacts enable row level security;
+
+drop policy if exists "authenticated can read"   on public.contacts;
+drop policy if exists "authenticated can insert" on public.contacts;
+drop policy if exists "authenticated can update" on public.contacts;
+drop policy if exists "authenticated can delete" on public.contacts;
+
+create policy "authenticated can read"   on public.contacts for select to authenticated using (true);
+create policy "authenticated can insert" on public.contacts for insert to authenticated with check (true);
+create policy "authenticated can update" on public.contacts for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.contacts for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'contacts'
+  ) then
+    alter publication supabase_realtime add table public.contacts;
+  end if;
+end $$;
+
+-- ============================================================
+-- 6) Checklist items — recurring per-property, per-category to-dos
+--    (e.g. a standing "Plumbing" or "Cleaning" checklist), separate
+--    from one-off tasks.
+-- ============================================================
+create table if not exists public.checklist_items (
+  id          uuid primary key default gen_random_uuid(),
+  property    text not null,
+  category    text not null default 'Other',
+  text        text not null,
+  checked     boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists checklist_items_set_updated_at on public.checklist_items;
+create trigger checklist_items_set_updated_at
+  before update on public.checklist_items
+  for each row execute function public.set_updated_at();
+
+alter table public.checklist_items enable row level security;
+
+drop policy if exists "authenticated can read"   on public.checklist_items;
+drop policy if exists "authenticated can insert" on public.checklist_items;
+drop policy if exists "authenticated can update" on public.checklist_items;
+drop policy if exists "authenticated can delete" on public.checklist_items;
+
+create policy "authenticated can read"   on public.checklist_items for select to authenticated using (true);
+create policy "authenticated can insert" on public.checklist_items for insert to authenticated with check (true);
+create policy "authenticated can update" on public.checklist_items for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.checklist_items for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'checklist_items'
+  ) then
+    alter publication supabase_realtime add table public.checklist_items;
+  end if;
+end $$;
+
+-- ============================================================
+-- 7) Task calls — "who do we need to call about this task", checked off
+--    live so two people don't call the same contractor twice.
+-- ============================================================
+create table if not exists public.task_calls (
+  id          uuid primary key default gen_random_uuid(),
+  task_id     uuid not null references public.tasks(id) on delete cascade,
+  text        text not null,
+  called      boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists task_calls_set_updated_at on public.task_calls;
+create trigger task_calls_set_updated_at
+  before update on public.task_calls
+  for each row execute function public.set_updated_at();
+
+alter table public.task_calls enable row level security;
+
+drop policy if exists "authenticated can read"   on public.task_calls;
+drop policy if exists "authenticated can insert" on public.task_calls;
+drop policy if exists "authenticated can update" on public.task_calls;
+drop policy if exists "authenticated can delete" on public.task_calls;
+
+create policy "authenticated can read"   on public.task_calls for select to authenticated using (true);
+create policy "authenticated can insert" on public.task_calls for insert to authenticated with check (true);
+create policy "authenticated can update" on public.task_calls for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.task_calls for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'task_calls'
+  ) then
+    alter publication supabase_realtime add table public.task_calls;
+  end if;
+end $$;
+
+-- ============================================================
+-- 8) Key dates — recurring annual compliance calendar (taxes, licenses,
+--    registrations). month/day repeat every year; the app computes the
+--    next occurrence and alerts as it approaches.
+-- ============================================================
+create table if not exists public.key_dates (
+  id          uuid primary key default gen_random_uuid(),
+  property    text default '',
+  title       text not null,
+  month       int not null check (month between 1 and 12),
+  day         int not null check (day between 1 and 31),
+  notes       text default '',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists key_dates_set_updated_at on public.key_dates;
+create trigger key_dates_set_updated_at
+  before update on public.key_dates
+  for each row execute function public.set_updated_at();
+
+alter table public.key_dates enable row level security;
+
+drop policy if exists "authenticated can read"   on public.key_dates;
+drop policy if exists "authenticated can insert" on public.key_dates;
+drop policy if exists "authenticated can update" on public.key_dates;
+drop policy if exists "authenticated can delete" on public.key_dates;
+
+create policy "authenticated can read"   on public.key_dates for select to authenticated using (true);
+create policy "authenticated can insert" on public.key_dates for insert to authenticated with check (true);
+create policy "authenticated can update" on public.key_dates for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.key_dates for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'key_dates'
+  ) then
+    alter publication supabase_realtime add table public.key_dates;
   end if;
 end $$;

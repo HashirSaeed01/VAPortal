@@ -5,9 +5,57 @@ export const PROPERTIES = [
   "Taylor", "1428 Ninth", "VA / Mariam", "General / Admin",
 ];
 
+// Buckets that live in PROPERTIES (so tasks can be filed under them) but
+// aren't real estate — don't show these as property cards / contact lists.
+export const NON_PROPERTY_BUCKETS = ["VA / Mariam", "General / Admin"];
+
+// Friendlier display names — the underlying property value (used for every
+// task/contact/checklist row already saved) never changes, only the label.
+export const PROPERTY_LABELS = {
+  "Sherman": "1508 Sherman, Alameda",
+  "Valencia / Clinton Park": "224-228 Valencia & 108-112 Clinton Park, SF",
+  "Guerrero": "578-586 Guerrero, SF",
+  "Russell": "2335 Russell, Berkeley",
+  "1428 Ninth": "1428 Ninth St, Alameda",
+};
+export function propertyLabel(p) {
+  return PROPERTY_LABELS[p] || p;
+}
+
+// Sentinel used by contacts (only) for a vendor who serves every property —
+// avoids one row per property for e.g. a handyman who covers everything.
+export const ALL_PROPERTIES = "All Properties";
+
+// Suggestions only (free text underneath) — who flags issues / who fixes them.
+export const STAFF = [
+  "Carrie", "Luis", "Benny", "Kevin", "Sylvia", "Leo", "Pablo", "Ryan", "Mariam", "Hashir",
+];
+
+// Suggestions only — trade/role of a property's contractor or vendor.
+export const CONTACT_ROLES = [
+  "Plumber", "Electrician", "Handyman", "Locksmith", "HVAC", "Appliance Repair",
+  "Cleaner", "Landscaper", "Painter", "Pest Control", "Property Manager", "Other",
+];
+
+// A key date "coming up soon" starts showing an alert this many days out.
+export const KEY_DATE_ALERT_DAYS = 30;
+
+// Next occurrence of an annual month/day (this year if not passed, else next).
+export function nextOccurrence(month, day) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const thisYear = new Date(today.getFullYear(), month - 1, day);
+  return thisYear >= today ? thisYear : new Date(today.getFullYear() + 1, month - 1, day);
+}
+export function daysUntil(month, day) {
+  const target = nextOccurrence(month, day);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / 86400000);
+}
+
 export const TYPES = [
-  "Maintenance", "To Pay", "To Purchase", "Awaiting Response", "Task",
-  "Request", "Reminder", "Training", "Airbnb Inquiry", "Other",
+  "Plumbing", "Electrical", "Doors & Locks", "Furniture", "Appliances",
+  "Cleaning", "Maintenance", "To Pay", "To Purchase", "Awaiting Response",
+  "Task", "Request", "Reminder", "Training", "Airbnb Inquiry", "Other",
 ];
 
 export const STATUSES = [
@@ -22,10 +70,10 @@ const NOT_STARTED_STATUSES = ["To Start"];
 export const STATES = ["Not Started", "In Progress", "Waiting on Carrie", "Done"];
 
 export const STATE_META = {
-  "Not Started":       { color: "#dc2626", chip: "bg-red-50 text-red-700 ring-red-200" },
-  "In Progress":       { color: "#2563eb", chip: "bg-blue-50 text-blue-700 ring-blue-200" },
-  "Waiting on Carrie": { color: "#d97706", chip: "bg-amber-50 text-amber-800 ring-amber-300" },
-  "Done":              { color: "#16a34a", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  "Not Started":       { color: "#f87171", chip: "bg-red-500/10 text-red-400 ring-red-500/30" },
+  "In Progress":       { color: "#60a5fa", chip: "bg-blue-500/10 text-blue-400 ring-blue-500/30" },
+  "Waiting on Carrie": { color: "#fbbf24", chip: "bg-amber-500/10 text-amber-400 ring-amber-500/30" },
+  "Done":              { color: "#34d399", chip: "bg-emerald-500/10 text-emerald-400 ring-emerald-500/30" },
 };
 
 export function stateOf(status) {
