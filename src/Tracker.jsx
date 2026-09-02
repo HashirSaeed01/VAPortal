@@ -909,7 +909,7 @@ export default function Tracker({ session, onSignOut }) {
     return {
       total: tasks.length, open: tasks.length - done, done,
       carrie: byState["Waiting on Carrie"], stale, priority,
-      propStats: Array.from(byProp, ([name, s]) => ({ name, ...s })).filter((p) => p.total > 0),
+      propStats: Array.from(byProp, ([name, s]) => ({ name, ...s })),
     };
   }, [tasks]);
 
