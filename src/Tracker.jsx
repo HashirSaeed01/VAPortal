@@ -299,7 +299,7 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
             <span className={"text-sm font-semibold " + (done ? "text-slate-500 line-through" : "text-white")}>{t.title}</span>
             {isStale ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-xs font-semibold text-red-400 ring-1 ring-inset ring-red-500/40">
-                <Clock size={11} /> {age}d, needs attention
+                <Clock size={11} /> {age}d !
               </span>
             ) : null}
             {calls.some((c) => !c.called) ? (
@@ -311,7 +311,8 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-slate-400">
             {showProperty ? <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">{propertyLabel(t.property)}</span> : null}
             <span className="rounded px-1.5 py-0.5 font-semibold" style={{ color: meta.color, backgroundColor: meta.color + "1a", boxShadow: `inset 0 0 0 1px ${meta.color}55` }}>{t.status}</span>
-            {t.assignedTo ? <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-300">→ {t.assignedTo}</span> : null}
+            {t.reportedBy ? <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">Flagged by {t.reportedBy}</span> : null}
+            {t.assignedTo ? <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-300">Fixing: {t.assignedTo}</span> : null}
           </div>
         </div>
 
@@ -432,6 +433,7 @@ export default function Tracker({ session, onSignOut }) {
   const [keyDateModalOpen, setKeyDateModalOpen] = useState(false);
   const [editingKeyDate, setEditingKeyDate] = useState(null);
   const [savingKeyDate, setSavingKeyDate] = useState(false);
+  const [showAllKeyDates, setShowAllKeyDates] = useState(false);
 
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
@@ -850,7 +852,7 @@ export default function Tracker({ session, onSignOut }) {
                    active={priorityFilter} onClick={() => setPriorityFilter((p) => !p)} />
               <Kpi label="Waiting on Carrie" value={metrics.carrie} tone="amber" icon={UserCheck}
                    active={stateFilter === "Waiting on Carrie"} onClick={() => toggleState("Waiting on Carrie")} />
-              <Kpi label={`Needs attention (${STALE_DAYS}+d)`} value={metrics.stale} tone="red" icon={AlertTriangle}
+              <Kpi label={`! (${STALE_DAYS}+d)`} value={metrics.stale} tone="red" icon={AlertTriangle}
                    active={stateFilter === "stale"} onClick={() => toggleState("stale")} />
               <Kpi label="Done" value={metrics.done} tone="emerald" icon={CheckCircle2}
                    active={stateFilter === "Done"} onClick={() => toggleState("Done")} />
@@ -876,7 +878,7 @@ export default function Tracker({ session, onSignOut }) {
                       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-slate-400">
                         <span>{p.open} open</span>
                         {p.priority ? <span className="text-red-400">{p.priority} priority</span> : null}
-                        {p.stale ? <span className="text-amber-400">{p.stale} needs attention</span> : null}
+                        {p.stale ? <span className="text-amber-400">{p.stale} !</span> : null}
                         {p.open === 0 ? <span className="text-emerald-400">All caught up</span> : null}
                         {contactCount ? <span className="flex items-center gap-1"><Users size={11} /> {contactCount}</span> : null}
                       </div>
@@ -893,13 +895,22 @@ export default function Tracker({ session, onSignOut }) {
                   <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
                     <Bell size={15} /> Key dates
                   </h2>
-                  <button type="button" onClick={() => { setEditingKeyDate(null); setKeyDateModalOpen(true); }}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
-                    <Plus size={13} /> Add key date
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => setShowAllKeyDates((v) => !v)}
+                      className="text-xs font-semibold text-slate-400 hover:text-white">
+                      {showAllKeyDates ? "Show upcoming only" : `Show all (${sortedKeyDates.length})`}
+                    </button>
+                    <button type="button" onClick={() => { setEditingKeyDate(null); setKeyDateModalOpen(true); }}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
+                      <Plus size={13} /> Add key date
+                    </button>
+                  </div>
                 </div>
+                {!showAllKeyDates && upcomingKeyDates.length === 0 ? (
+                  <p className="text-xs font-medium text-slate-500">Nothing due in the next {KEY_DATE_ALERT_DAYS} days.</p>
+                ) : null}
                 <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  {sortedKeyDates.map((k) => {
+                  {(showAllKeyDates ? sortedKeyDates : upcomingKeyDates).map((k) => {
                     const dLeft = daysUntil(k.month, k.day);
                     const soon = dLeft <= 7;
                     return (
@@ -1041,7 +1052,7 @@ export default function Tracker({ session, onSignOut }) {
                 <option value="open">Open</option>
                 <option value="all">Show all</option>
                 <option value="Waiting on Carrie">Waiting on Carrie</option>
-                <option value="stale">{`Needs attention (${STALE_DAYS}+ days)`}</option>
+                <option value="stale">{`! (${STALE_DAYS}+ days)`}</option>
                 <option value="Done">Done</option>
               </select>
               {propFilter !== "all" ? (
