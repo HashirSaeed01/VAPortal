@@ -362,7 +362,7 @@ function buildReportText(tasks, f) {
   return lines.join("\n");
 }
 
-function ReportModal({ tasks, onClose }) {
+function ReportModal({ tasks, contacts, onClose }) {
   const [preset, setPreset] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -377,8 +377,19 @@ function ReportModal({ tasks, onClose }) {
     if (key !== "custom") { const r = presetRange(key); setFrom(r.from); setTo(r.to); }
   };
 
-  const assignees = useMemo(() => Array.from(new Set(tasks.map((t) => t.assignedTo).filter(Boolean))).sort(), [tasks]);
-  const reporters = useMemo(() => Array.from(new Set(tasks.map((t) => t.reportedBy).filter(Boolean))).sort(), [tasks]);
+  // Contractors/assignees: real vendor directory + staff + anything already
+  // typed into a task, so the list survives even if tasks get wiped.
+  const assignees = useMemo(() => {
+    const set = new Set(STAFF);
+    contacts.forEach((c) => { if (c.name) set.add(c.name); });
+    tasks.forEach((t) => { if (t.assignedTo) set.add(t.assignedTo); });
+    return Array.from(set).sort();
+  }, [tasks, contacts]);
+  const reporters = useMemo(() => {
+    const set = new Set(STAFF);
+    tasks.forEach((t) => { if (t.reportedBy) set.add(t.reportedBy); });
+    return Array.from(set).sort();
+  }, [tasks]);
 
   const text = useMemo(
     () => buildReportText(tasks, { from, to, property, assignedTo, reportedBy, state }),
@@ -1339,7 +1350,7 @@ export default function Tracker({ session, onSignOut }) {
       ) : null}
 
       {reportModalOpen ? (
-        <ReportModal tasks={tasks} onClose={() => setReportModalOpen(false)} />
+        <ReportModal tasks={tasks} contacts={contacts} onClose={() => setReportModalOpen(false)} />
       ) : null}
 
       {deleteAllModalOpen ? (
