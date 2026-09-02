@@ -3,7 +3,7 @@ import {
   Plus, Trash2, Pencil, X, Download, Search, AlertTriangle, CheckCircle2,
   Clock, Loader2, UserCheck, ChevronDown, ChevronRight,
   RefreshCw, LogOut, Flag, FileText, Building2, Phone, Mail, Users, Bell, PhoneCall,
-  CalendarRange, Copy, Check,
+  Copy, Check,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import {
@@ -280,47 +280,113 @@ function KeyDateModal({ keyDate, onSave, onClose, saving }) {
   );
 }
 
-// Builds a plain-text rundown of every task whose date falls in [from, to]
-// (inclusive), grouped by date — the thing you'd paste into a message.
-function buildDateRangeText(tasks, from, to) {
-  const fromDate = from ? new Date(from + "T00:00:00") : null;
-  const toDate = to ? new Date(to + "T23:59:59") : null;
-  const inRange = tasks.filter((t) => {
-    const d = parseDate(t.startDate);
-    if (!d) return false;
-    if (fromDate && d < fromDate) return false;
-    if (toDate && d > toDate) return false;
+const DATE_PRESETS = [
+  { key: "all", label: "All time" },
+  { key: "7d", label: "Last 7 days" },
+  { key: "30d", label: "Last 30 days" },
+  { key: "thisWeek", label: "This week" },
+  { key: "lastWeek", label: "Last week" },
+  { key: "thisMonth", label: "This month" },
+  { key: "custom", label: "Custom range" },
+];
+
+function presetRange(key) {
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const startOfWeek = (d) => { const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day; const r = new Date(d); r.setDate(d.getDate() + diff); return r; };
+  if (key === "7d") { const from = new Date(today); from.setDate(from.getDate() - 6); return { from: iso(from), to: iso(today) }; }
+  if (key === "30d") { const from = new Date(today); from.setDate(from.getDate() - 29); return { from: iso(from), to: iso(today) }; }
+  if (key === "thisWeek") { const from = startOfWeek(today); const to = new Date(from); to.setDate(to.getDate() + 6); return { from: iso(from), to: iso(to) }; }
+  if (key === "lastWeek") { const from = startOfWeek(today); from.setDate(from.getDate() - 7); const to = new Date(from); to.setDate(to.getDate() + 6); return { from: iso(from), to: iso(to) }; }
+  if (key === "thisMonth") { const from = new Date(today.getFullYear(), today.getMonth(), 1); const to = new Date(today.getFullYear(), today.getMonth() + 1, 0); return { from: iso(from), to: iso(to) }; }
+  return { from: "", to: "" };
+}
+
+// Builds a plain-text rundown grouped by property, honoring every active
+// filter — the thing you'd paste into a status update or message.
+function buildReportText(tasks, f) {
+  const fromDate = f.from ? new Date(f.from + "T00:00:00") : null;
+  const toDate = f.to ? new Date(f.to + "T23:59:59") : null;
+  const filtered = tasks.filter((t) => {
+    if (f.property !== "all" && t.property !== f.property) return false;
+    if (f.assignedTo !== "all" && t.assignedTo !== f.assignedTo) return false;
+    if (f.reportedBy !== "all" && t.reportedBy !== f.reportedBy) return false;
+    if (f.state === "open" && stateOf(t.status) === "Done") return false;
+    if (f.state === "done" && stateOf(t.status) !== "Done") return false;
+    if (fromDate || toDate) {
+      const d = parseDate(t.startDate);
+      if (!d) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
+    }
     return true;
   });
-  const byDate = new Map();
-  for (const t of inRange) {
-    if (!byDate.has(t.startDate)) byDate.set(t.startDate, []);
-    byDate.get(t.startDate).push(t);
+
+  const filterBits = [];
+  if (f.from || f.to) filterBits.push(f.from && f.to ? `${f.from} to ${f.to}` : f.from ? `from ${f.from}` : `through ${f.to}`);
+  if (f.property !== "all") filterBits.push(propertyLabel(f.property));
+  if (f.assignedTo !== "all") filterBits.push(`assigned to ${f.assignedTo}`);
+  if (f.reportedBy !== "all") filterBits.push(`reported by ${f.reportedBy}`);
+  if (f.state !== "all") filterBits.push(f.state === "open" ? "open only" : "done only");
+
+  const byProp = new Map();
+  for (const t of filtered) {
+    if (!byProp.has(t.property)) byProp.set(t.property, []);
+    byProp.get(t.property).push(t);
   }
-  const sortedDates = Array.from(byDate.keys()).sort((a, b) => parseDate(a) - parseDate(b));
-  const rangeLabel = from && to ? `${from} to ${to}` : from ? `from ${from}` : to ? `through ${to}` : "all dated tasks";
-  const lines = [`BAY HOMES — TASKS ${rangeLabel}`, `Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`, ""];
-  if (sortedDates.length === 0) {
-    lines.push("No dated tasks fall in this range.");
-  }
-  for (const date of sortedDates) {
-    lines.push(date);
-    for (const t of byDate.get(date)) {
+  const lines = [
+    "BAY HOMES — TASK REPORT",
+    filterBits.length ? filterBits.join(" · ") : "All tasks",
+    `Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`,
+    "",
+  ];
+  if (filtered.length === 0) lines.push("No tasks match these filters.");
+  for (const [prop, items] of byProp) {
+    const sorted = [...items].sort((a, b) => {
+      const aDone = stateOf(a.status) === "Done", bDone = stateOf(b.status) === "Done";
+      if (aDone !== bDone) return aDone ? 1 : -1;
+      if (!!b.priority !== !!a.priority) return b.priority ? 1 : -1;
+      return 0;
+    });
+    lines.push(propertyLabel(prop).toUpperCase());
+    for (const t of sorted) {
       const done = stateOf(t.status) === "Done";
       const who = t.assignedTo ? ` -> ${t.assignedTo}` : "";
-      lines.push(`* ${t.title} (${propertyLabel(t.property)})${who} — ${t.status}${done ? " [Done]" : ""}`);
+      const tag = done ? " (Done)" : t.priority ? " (Priority)" : "";
+      const reported = t.reportedBy ? `  [reported by ${t.reportedBy}]` : "";
+      lines.push(`* ${t.title}${who}${tag}${reported}`);
+      if (t.notes) lines.push(`  ${t.notes.replace(/\n/g, " ")}`);
     }
     lines.push("");
   }
   return lines.join("\n");
 }
 
-function DateRangeModal({ tasks, onClose }) {
+function ReportModal({ tasks, onClose }) {
+  const [preset, setPreset] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [property, setProperty] = useState("all");
+  const [assignedTo, setAssignedTo] = useState("all");
+  const [reportedBy, setReportedBy] = useState("all");
+  const [state, setState] = useState("all");
   const [copied, setCopied] = useState(false);
-  const text = useMemo(() => buildDateRangeText(tasks, from, to), [tasks, from, to]);
+
+  const applyPreset = (key) => {
+    setPreset(key);
+    if (key !== "custom") { const r = presetRange(key); setFrom(r.from); setTo(r.to); }
+  };
+
+  const assignees = useMemo(() => Array.from(new Set(tasks.map((t) => t.assignedTo).filter(Boolean))).sort(), [tasks]);
+  const reporters = useMemo(() => Array.from(new Set(tasks.map((t) => t.reportedBy).filter(Boolean))).sort(), [tasks]);
+
+  const text = useMemo(
+    () => buildReportText(tasks, { from, to, property, assignedTo, reportedBy, state }),
+    [tasks, from, to, property, assignedTo, reportedBy, state]
+  );
+
   const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
   const lbl = "block text-xs font-semibold text-slate-300 mb-1";
 
   const copy = async () => {
@@ -330,20 +396,61 @@ function DateRangeModal({ tasks, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
-      <div className="mt-10 w-full max-w-xl rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="mt-10 w-full max-w-2xl rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><CalendarRange size={16} /> Tasks by date range</h3>
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><FileText size={16} /> Report</h3>
           <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
         </div>
         <div className="space-y-3 px-5 py-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={lbl}>From</label>
-              <input type="date" className={field} value={from} onChange={(e) => setFrom(e.target.value)} />
+              <label className={lbl}>Date range</label>
+              <select className={selectField} value={preset} onChange={(e) => applyPreset(e.target.value)}>
+                {DATE_PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
             </div>
             <div>
-              <label className={lbl}>To</label>
-              <input type="date" className={field} value={to} onChange={(e) => setTo(e.target.value)} />
+              <label className={lbl}>State</label>
+              <select className={selectField} value={state} onChange={(e) => setState(e.target.value)}>
+                <option value="all">All</option>
+                <option value="open">Open only</option>
+                <option value="done">Done only</option>
+              </select>
+            </div>
+          </div>
+          {preset === "custom" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={lbl}>From</label>
+                <input type="date" className={field} value={from} onChange={(e) => setFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className={lbl}>To</label>
+                <input type="date" className={field} value={to} onChange={(e) => setTo(e.target.value)} />
+              </div>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>Which units</label>
+              <select className={selectField} value={property} onChange={(e) => setProperty(e.target.value)}>
+                <option value="all">All properties</option>
+                {PROPERTIES.map((p) => <option key={p} value={p}>{propertyLabel(p)}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={lbl}>Which contractor / assignee</label>
+              <select className={selectField} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+                <option value="all">Anyone</option>
+                {assignees.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className={lbl}>Whose complaints / who flagged it</label>
+              <select className={selectField} value={reportedBy} onChange={(e) => setReportedBy(e.target.value)}>
+                <option value="all">Anyone</option>
+                {reporters.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
             </div>
           </div>
           <div>
@@ -354,13 +461,13 @@ function DateRangeModal({ tasks, onClose }) {
                 {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />} {copied ? "Copied" : "Copy"}
               </button>
             </div>
-            <textarea readOnly value={text} rows={12}
+            <textarea readOnly value={text} rows={10}
               className="w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:outline-none" />
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
           <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Close</button>
-          <button type="button" onClick={() => downloadFile(`bay-homes-tasks-${from || "start"}-to-${to || "end"}.txt`, text, "text/plain")}
+          <button type="button" onClick={() => downloadFile(`bay-homes-report-${from || "all"}-to-${to || "all"}.txt`, text, "text/plain")}
             className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
             <Download size={15} /> Download
           </button>
@@ -560,7 +667,7 @@ export default function Tracker({ session, onSignOut }) {
   const [savingKeyDate, setSavingKeyDate] = useState(false);
   const [showAllKeyDates, setShowAllKeyDates] = useState(false);
 
-  const [dateRangeModalOpen, setDateRangeModalOpen] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
 
@@ -873,40 +980,6 @@ export default function Tracker({ session, onSignOut }) {
     downloadFile("bay-homes-tasks.csv", [head, ...rows].map((r) => r.map(csvEscape).join(",")).join("\n"), "text/csv");
   };
 
-  // Clean, human-readable summary grouped by property — the format you'd
-  // otherwise have to type out by hand for a status update.
-  const exportReport = () => {
-    const byProp = new Map(PROPERTIES.map((p) => [p, []]));
-    for (const t of tasks) {
-      if (!byProp.has(t.property)) byProp.set(t.property, []);
-      byProp.get(t.property).push(t);
-    }
-    const lines = [
-      "BAY HOMES — TASK REPORT",
-      `Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`,
-      "",
-    ];
-    for (const [prop, items] of byProp) {
-      if (!items.length) continue;
-      const sorted = [...items].sort((a, b) => {
-        const aDone = stateOf(a.status) === "Done", bDone = stateOf(b.status) === "Done";
-        if (aDone !== bDone) return aDone ? 1 : -1;
-        if (!!b.priority !== !!a.priority) return b.priority ? 1 : -1;
-        return 0;
-      });
-      lines.push(prop.toUpperCase());
-      for (const t of sorted) {
-        const done = stateOf(t.status) === "Done";
-        const who = t.assignedTo ? ` -> ${t.assignedTo}` : "";
-        const tag = done ? " (Done)" : t.priority ? " (Priority)" : "";
-        const reported = t.reportedBy ? `  [reported by ${t.reportedBy}]` : "";
-        lines.push(`* ${t.title}${who}${tag}${reported}`);
-        if (t.notes) lines.push(`  ${t.notes.replace(/\n/g, " ")}`);
-      }
-      lines.push("");
-    }
-    downloadFile("bay-homes-report.txt", lines.join("\n"), "text/plain");
-  };
 
   const anyFilter = stateFilter !== "open" || propFilter !== "all" || priorityFilter || query.trim() !== "";
   const clearFilters = () => { setStateFilter("open"); setPropFilter("all"); setPriorityFilter(false); setQuery(""); };
@@ -931,11 +1004,8 @@ export default function Tracker({ session, onSignOut }) {
             <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
               <Download size={15} /> CSV
             </button>
-            <button type="button" onClick={exportReport} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+            <button type="button" onClick={() => setReportModalOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
               <FileText size={15} /> Report
-            </button>
-            <button type="button" onClick={() => setDateRangeModalOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
-              <CalendarRange size={15} /> By date
             </button>
             <button type="button" onClick={() => openAdd(propFilter !== "all" ? { property: propFilter } : null)}
               className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
@@ -1268,8 +1338,8 @@ export default function Tracker({ session, onSignOut }) {
           onClose={() => { setKeyDateModalOpen(false); setEditingKeyDate(null); }} />
       ) : null}
 
-      {dateRangeModalOpen ? (
-        <DateRangeModal tasks={tasks} onClose={() => setDateRangeModalOpen(false)} />
+      {reportModalOpen ? (
+        <ReportModal tasks={tasks} onClose={() => setReportModalOpen(false)} />
       ) : null}
 
       {deleteAllModalOpen ? (
