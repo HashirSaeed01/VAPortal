@@ -63,6 +63,40 @@ export const TYPES = [
   "Task", "Request", "Reminder", "Training", "Airbnb Inquiry", "Other",
 ];
 
+// Which contact role handles each task category. "Maintenance" and
+// "Furniture" map to Handyman deliberately — everything else prefers a
+// specialist over the generalist.
+export const TYPE_TO_ROLE = {
+  "Plumbing": "Plumber",
+  "Electrical": "Electrician",
+  "Doors & Locks": "Locksmith",
+  "Appliances": "Appliance Repair",
+  "Cleaning": "Cleaner",
+  "Furniture": "Handyman",
+  "Maintenance": "Handyman",
+};
+
+// Tenant helpers who happen to have a contact card but aren't real paid
+// vendors — never auto-recommend them for contractor work.
+const RECOMMEND_EXCLUDE = ["William Martin"];
+
+// Best-guess contractor for a task: a property-specific specialist first,
+// then whoever covers "All Properties" for that role. Luis (Handyman) only
+// comes up for categories mapped to Handyman — he never outranks a
+// specialist like a Plumber or Locksmith.
+export function recommendContractor(contacts, property, type) {
+  const role = TYPE_TO_ROLE[type];
+  if (!role) return "";
+  const matches = contacts.filter((c) => c.role === role && !RECOMMEND_EXCLUDE.includes(c.name) && (c.property === property || c.property === ALL_PROPERTIES));
+  if (matches.length === 0) return "";
+  const specific = matches.find((c) => c.property === property);
+  if (specific) return specific.name;
+  // No property-specific match — among equally-ranked generalists, Luis is
+  // the trusted default handyman.
+  const luis = matches.find((c) => c.name === "Luis");
+  return (luis || matches[0]).name;
+}
+
 export const STATUSES = [
   "To Start", "Scheduled", "On Going", "Currently Monitoring",
   "To Review by Carrie", "Confirm by Carrie", "Complete", "No Action Needed",

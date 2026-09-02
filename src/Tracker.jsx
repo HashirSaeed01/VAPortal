@@ -9,7 +9,7 @@ import { supabase } from "./lib/supabase.js";
 import {
   PROPERTIES, TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF, ASSIGNABLE_STAFF,
   NON_PROPERTY_BUCKETS, CONTACT_ROLES, ALL_PROPERTIES, KEY_DATE_ALERT_DAYS,
-  propertyLabel, stateOf, daysSince, daysUntil, parseDate,
+  propertyLabel, stateOf, daysSince, daysUntil, parseDate, recommendContractor,
 } from "./data.js";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -86,11 +86,35 @@ function Combobox({ value, onChange, options, placeholder, field }) {
   );
 }
 
-function TaskModal({ task, prefill, onSave, onClose, saving }) {
-  const [draft, setDraft] = useState(
-    task || { title: "", property: PROPERTIES[0], type: TYPES[0], startDate: "", status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, ...prefill }
-  );
+function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
+  const [draft, setDraft] = useState(() => {
+    const base = task || { title: "", property: PROPERTIES[0], type: TYPES[0], startDate: "", status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, ...prefill };
+    if (!task && !base.assignedTo) {
+      const rec = recommendContractor(contacts, base.property, base.type);
+      if (rec) return { ...base, assignedTo: rec };
+    }
+    return base;
+  });
+  // Tracks whether "assigned to" is still just our suggestion (fair game to
+  // update as property/type change) vs. something the user actually chose.
+  const [autoAssigned, setAutoAssigned] = useState(() => !task && !prefill?.assignedTo);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  // Changing property/type suggests the right specialist automatically —
+  // but never overwrites an assignee you've already picked or typed.
+  const setTypeOrProperty = (key, value) => {
+    setDraft((d) => {
+      const next = { ...d, [key]: value };
+      if (autoAssigned) {
+        const rec = recommendContractor(contacts, next.property, next.type);
+        next.assignedTo = rec || "";
+      }
+      return next;
+    });
+  };
+  const assignOptions = useMemo(
+    () => Array.from(new Set([...contacts.map((c) => c.name), ...ASSIGNABLE_STAFF])).sort(),
+    [contacts]
+  );
   const valid = draft.title.trim().length > 0;
   const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
   const selectField = "w-full rounded-md border border-white/40 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
@@ -111,13 +135,13 @@ function TaskModal({ task, prefill, onSave, onClose, saving }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={lbl}>Property</label>
-              <select className={selectField} value={draft.property} onChange={(e) => set("property", e.target.value)}>
+              <select className={selectField} value={draft.property} onChange={(e) => setTypeOrProperty("property", e.target.value)}>
                 {PROPERTIES.map((p) => <option key={p} value={p}>{propertyLabel(p)}</option>)}
               </select>
             </div>
             <div>
               <label className={lbl}>Type</label>
-              <select className={selectField} value={draft.type} onChange={(e) => set("type", e.target.value)}>
+              <select className={selectField} value={draft.type} onChange={(e) => setTypeOrProperty("type", e.target.value)}>
                 {TYPES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </div>
@@ -127,7 +151,8 @@ function TaskModal({ task, prefill, onSave, onClose, saving }) {
             </div>
             <div>
               <label className={lbl}>Assigned to</label>
-              <Combobox field={field} options={ASSIGNABLE_STAFF} value={draft.assignedTo} onChange={(v) => set("assignedTo", v)} placeholder="Who's fixing it?" />
+              <Combobox field={field} options={assignOptions} value={draft.assignedTo}
+                onChange={(v) => { set("assignedTo", v); setAutoAssigned(false); }} placeholder="Who's fixing it?" />
             </div>
             <div>
               <label className={lbl}>Status</label>
@@ -377,14 +402,12 @@ function ReportModal({ tasks, contacts, onClose }) {
     if (key !== "custom") { const r = presetRange(key); setFrom(r.from); setTo(r.to); }
   };
 
-  // Contractors/assignees: real vendor directory + staff + anything already
-  // typed into a task, so the list survives even if tasks get wiped.
-  const assignees = useMemo(() => {
-    const set = new Set(ASSIGNABLE_STAFF);
-    contacts.forEach((c) => { if (c.name) set.add(c.name); });
-    tasks.forEach((t) => { if (t.assignedTo) set.add(t.assignedTo); });
-    return Array.from(set).sort();
-  }, [tasks, contacts]);
+  // Contractors are exactly the vendor directory — nothing else counts,
+  // so this list survives even if tasks get wiped.
+  const assignees = useMemo(
+    () => Array.from(new Set(contacts.map((c) => c.name).filter(Boolean))).sort(),
+    [contacts]
+  );
   const reporters = useMemo(() => {
     const set = new Set(STAFF);
     tasks.forEach((t) => { if (t.reportedBy) set.add(t.reportedBy); });
@@ -1335,7 +1358,7 @@ export default function Tracker({ session, onSignOut }) {
       </main>
 
       {modalOpen ? (
-        <TaskModal task={editing} prefill={addPrefill} saving={saving} onSave={saveTask}
+        <TaskModal task={editing} prefill={addPrefill} contacts={contacts} saving={saving} onSave={saveTask}
           onClose={() => { setModalOpen(false); setEditing(null); setAddPrefill(null); }} />
       ) : null}
 
