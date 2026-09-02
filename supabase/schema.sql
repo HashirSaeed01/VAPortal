@@ -25,6 +25,7 @@ create table if not exists public.tasks (
 alter table public.tasks add column if not exists reported_by text default '';
 alter table public.tasks add column if not exists assigned_to text default '';
 alter table public.tasks add column if not exists priority boolean not null default false;
+alter table public.tasks add column if not exists unit text default '';
 
 -- 2) Keep updated_at current on every update
 create or replace function public.set_updated_at()
@@ -230,5 +231,89 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'key_dates'
   ) then
     alter publication supabase_realtime add table public.key_dates;
+  end if;
+end $$;
+
+-- ============================================================
+-- 9) Properties — real properties, editable from the app (name,
+--    display label, active flag, sort order) instead of hardcoded.
+-- ============================================================
+create table if not exists public.properties (
+  key         text primary key,
+  label       text not null,
+  is_active   boolean not null default true,
+  sort_order  int not null default 0,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists properties_set_updated_at on public.properties;
+create trigger properties_set_updated_at
+  before update on public.properties
+  for each row execute function public.set_updated_at();
+
+alter table public.properties enable row level security;
+
+drop policy if exists "authenticated can read"   on public.properties;
+drop policy if exists "authenticated can insert" on public.properties;
+drop policy if exists "authenticated can update" on public.properties;
+drop policy if exists "authenticated can delete" on public.properties;
+
+create policy "authenticated can read"   on public.properties for select to authenticated using (true);
+create policy "authenticated can insert" on public.properties for insert to authenticated with check (true);
+create policy "authenticated can update" on public.properties for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.properties for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'properties'
+  ) then
+    alter publication supabase_realtime add table public.properties;
+  end if;
+end $$;
+
+-- ============================================================
+-- 10) Units — individual units within a property (label, sqft,
+--     tenant, furniture, paint color, notes).
+-- ============================================================
+create table if not exists public.units (
+  id          uuid primary key default gen_random_uuid(),
+  property    text not null references public.properties(key),
+  label       text not null,
+  sqft        int,
+  tenant      text default '',
+  furniture   text default '',
+  paint_color text default '',
+  notes       text default '',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+drop trigger if exists units_set_updated_at on public.units;
+create trigger units_set_updated_at
+  before update on public.units
+  for each row execute function public.set_updated_at();
+
+alter table public.units enable row level security;
+
+drop policy if exists "authenticated can read"   on public.units;
+drop policy if exists "authenticated can insert" on public.units;
+drop policy if exists "authenticated can update" on public.units;
+drop policy if exists "authenticated can delete" on public.units;
+
+create policy "authenticated can read"   on public.units for select to authenticated using (true);
+create policy "authenticated can insert" on public.units for insert to authenticated with check (true);
+create policy "authenticated can update" on public.units for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.units for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'units'
+  ) then
+    alter publication supabase_realtime add table public.units;
   end if;
 end $$;

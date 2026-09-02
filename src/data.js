@@ -1,26 +1,10 @@
 export const STALE_DAYS = 14;
 
-export const PROPERTIES = [
-  "Sherman", "Valencia / Clinton Park", "Guerrero", "Russell",
-  "Taylor", "1428 Ninth", "VA / Mariam", "General / Admin",
-];
-
-// Buckets that live in PROPERTIES (so tasks can be filed under them) but
-// aren't real estate — don't show these as property cards / contact lists.
+// Real properties now live in the "properties" table (name/label/active/
+// sort order) so they can be added, relabeled, or retired from the app —
+// see fetchProperties in Tracker.jsx. These two admin buckets aren't real
+// estate, so they stay as fixed options rather than rows in that table.
 export const NON_PROPERTY_BUCKETS = ["VA / Mariam", "General / Admin"];
-
-// Friendlier display names — the underlying property value (used for every
-// task/contact/checklist row already saved) never changes, only the label.
-export const PROPERTY_LABELS = {
-  "Sherman": "1508 Sherman, Alameda",
-  "Valencia / Clinton Park": "224-228 Valencia & 108-112 Clinton Park, SF",
-  "Guerrero": "578-586 Guerrero, SF",
-  "Russell": "2335 Russell, Berkeley",
-  "1428 Ninth": "1428 Ninth St, Alameda",
-};
-export function propertyLabel(p) {
-  return PROPERTY_LABELS[p] || p;
-}
 
 // Sentinel used by contacts (only) for a vendor who serves every property —
 // avoids one row per property for e.g. a handyman who covers everything.

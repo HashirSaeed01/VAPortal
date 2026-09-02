@@ -3,27 +3,37 @@ import {
   Plus, Trash2, Pencil, X, Download, Search, AlertTriangle, CheckCircle2,
   Clock, Loader2, UserCheck, ChevronDown, ChevronRight,
   RefreshCw, LogOut, Flag, FileText, Building2, Phone, Mail, Users, Bell, PhoneCall,
-  Copy, Check,
+  Copy, Check, Settings, DoorOpen, ClipboardList, ArrowLeft,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import {
-  PROPERTIES, TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF, ASSIGNABLE_STAFF,
+  TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF, ASSIGNABLE_STAFF,
   NON_PROPERTY_BUCKETS, CONTACT_ROLES, ALL_PROPERTIES, KEY_DATE_ALERT_DAYS,
-  propertyLabel, stateOf, daysSince, daysUntil, parseDate, recommendContractor,
+  stateOf, daysSince, daysUntil, parseDate, recommendContractor,
 } from "./data.js";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Properties now live in the DB (see fetchProperties) — this resolves a
+// property key to its friendly label, falling back to the raw key so
+// admin buckets (General / Admin, VA / Mariam) and any not-yet-loaded
+// property still display something reasonable.
+function propertyLabel(key, labels) {
+  return (labels && labels[key]) || key;
+}
 
 /* ---- DB row <-> app object mapping (DB uses snake_case start_date) ---- */
 const toRow = (t) => ({
   title: t.title, property: t.property, type: t.type,
   start_date: t.startDate || "", status: t.status, notes: t.notes || "",
   reported_by: t.reportedBy || "", assigned_to: t.assignedTo || "", priority: !!t.priority,
+  unit: t.unit || "",
 });
 const fromRow = (r) => ({
   id: r.id, title: r.title, property: r.property, type: r.type,
   startDate: r.start_date || "", status: r.status, notes: r.notes || "",
   reportedBy: r.reported_by || "", assignedTo: r.assigned_to || "", priority: !!r.priority,
+  unit: r.unit || "",
 });
 
 function csvEscape(v) {
@@ -86,9 +96,18 @@ function Combobox({ value, onChange, options, placeholder, field }) {
   );
 }
 
-function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
+function TaskModal({ task, prefill, contacts, properties, units, propertyLabels, onSave, onClose, saving }) {
+  const propertyOptions = useMemo(() => {
+    const opts = properties.filter((p) => p.is_active).map((p) => p.key);
+    // Editing a task filed under a since-deactivated property — keep it
+    // selectable so saving doesn't silently reassign it.
+    const current = task?.property || prefill?.property;
+    if (current && !opts.includes(current) && !NON_PROPERTY_BUCKETS.includes(current)) opts.push(current);
+    return [...opts, ...NON_PROPERTY_BUCKETS];
+  }, [properties, task, prefill]);
+
   const [draft, setDraft] = useState(() => {
-    const base = task || { title: "", property: PROPERTIES[0], type: TYPES[0], startDate: "", status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, ...prefill };
+    const base = task || { title: "", property: propertyOptions[0] || "", type: TYPES[0], startDate: "", status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, unit: "", ...prefill };
     if (!task && !base.assignedTo) {
       const rec = recommendContractor(contacts, base.property, base.type);
       if (rec) return { ...base, assignedTo: rec };
@@ -104,6 +123,7 @@ function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
   const setTypeOrProperty = (key, value) => {
     setDraft((d) => {
       const next = { ...d, [key]: value };
+      if (key === "property" && next.property !== d.property) next.unit = "";
       if (autoAssigned) {
         const rec = recommendContractor(contacts, next.property, next.type);
         next.assignedTo = rec || "";
@@ -111,13 +131,14 @@ function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
       return next;
     });
   };
+  const unitOptions = useMemo(() => units.filter((u) => u.property === draft.property), [units, draft.property]);
   const assignOptions = useMemo(
     () => Array.from(new Set([...contacts.map((c) => c.name), ...ASSIGNABLE_STAFF])).sort(),
     [contacts]
   );
   const valid = draft.title.trim().length > 0;
   const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
-  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 pl-3 pr-8 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
   const lbl = "block text-xs font-semibold text-slate-300 mb-1";
 
   return (
@@ -136,7 +157,7 @@ function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
             <div>
               <label className={lbl}>Property</label>
               <select className={selectField} value={draft.property} onChange={(e) => setTypeOrProperty("property", e.target.value)}>
-                {PROPERTIES.map((p) => <option key={p} value={p}>{propertyLabel(p)}</option>)}
+                {propertyOptions.map((p) => <option key={p} value={p}>{propertyLabel(p, propertyLabels)}</option>)}
               </select>
             </div>
             <div>
@@ -145,6 +166,15 @@ function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
                 {TYPES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </div>
+            {unitOptions.length > 0 ? (
+              <div className="col-span-2">
+                <label className={lbl}>Unit <span className="font-normal text-slate-500">(optional — leave blank for whole-property)</span></label>
+                <select className={selectField} value={draft.unit} onChange={(e) => set("unit", e.target.value)}>
+                  <option value="">Whole property</option>
+                  {unitOptions.map((u) => <option key={u.id} value={u.label}>{u.label}</option>)}
+                </select>
+              </div>
+            ) : null}
             <div>
               <label className={lbl}>Reported by</label>
               <Combobox field={field} options={STAFF} value={draft.reportedBy} onChange={(v) => set("reportedBy", v)} placeholder="Who flagged it?" />
@@ -188,7 +218,7 @@ function TaskModal({ task, prefill, contacts, onSave, onClose, saving }) {
   );
 }
 
-function ContactModal({ contact, property, prefillRole, onSave, onClose, saving }) {
+function ContactModal({ contact, property, prefillRole, propertyLabels, onSave, onClose, saving }) {
   const [draft, setDraft] = useState(contact || { property, name: "", role: prefillRole || "", phone: "", email: "", notes: "" });
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
   const valid = draft.name.trim().length > 0;
@@ -200,7 +230,7 @@ function ContactModal({ contact, property, prefillRole, onSave, onClose, saving 
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
       <div className="mt-10 w-full max-w-sm rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
-          <h3 className="text-sm font-semibold text-white">{contact ? "Edit contact" : "Add contact"} <span className="font-normal text-slate-400">· {allProps ? ALL_PROPERTIES : propertyLabel(property)}</span></h3>
+          <h3 className="text-sm font-semibold text-white">{contact ? "Edit contact" : "Add contact"} <span className="font-normal text-slate-400">· {allProps ? ALL_PROPERTIES : propertyLabel(property, propertyLabels)}</span></h3>
           <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
         </div>
         <div className="space-y-3 px-5 py-4">
@@ -245,12 +275,12 @@ function ContactModal({ contact, property, prefillRole, onSave, onClose, saving 
   );
 }
 
-function KeyDateModal({ keyDate, onSave, onClose, saving }) {
+function KeyDateModal({ keyDate, properties, propertyLabels, onSave, onClose, saving }) {
   const [draft, setDraft] = useState(keyDate || { property: "", title: "", month: 1, day: 1, notes: "" });
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
   const valid = draft.title.trim().length > 0;
   const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
-  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 pl-3 pr-8 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
   const lbl = "block text-xs font-semibold text-slate-300 mb-1";
   const days = Array.from({ length: 31 }, (_, i) => i + 1);
 
@@ -284,7 +314,8 @@ function KeyDateModal({ keyDate, onSave, onClose, saving }) {
             <label className={lbl}>Property (optional)</label>
             <select className={selectField} value={draft.property || ""} onChange={(e) => set("property", e.target.value)}>
               <option value="">All properties / company-wide</option>
-              {PROPERTIES.map((p) => <option key={p} value={p}>{propertyLabel(p)}</option>)}
+              {properties.map((p) => <option key={p.key} value={p.key}>{propertyLabel(p.key, propertyLabels)}</option>)}
+              {NON_PROPERTY_BUCKETS.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
           <div>
@@ -329,7 +360,7 @@ function presetRange(key) {
 
 // Builds a plain-text rundown grouped by property, honoring every active
 // filter — the thing you'd paste into a status update or message.
-function buildReportText(tasks, f) {
+function buildReportText(tasks, f, labels) {
   const fromDate = f.from ? new Date(f.from + "T00:00:00") : null;
   const toDate = f.to ? new Date(f.to + "T23:59:59") : null;
   const filtered = tasks.filter((t) => {
@@ -349,7 +380,7 @@ function buildReportText(tasks, f) {
 
   const filterBits = [];
   if (f.from || f.to) filterBits.push(f.from && f.to ? `${f.from} to ${f.to}` : f.from ? `from ${f.from}` : `through ${f.to}`);
-  if (f.property !== "all") filterBits.push(propertyLabel(f.property));
+  if (f.property !== "all") filterBits.push(propertyLabel(f.property, labels));
   if (f.assignedTo !== "all") filterBits.push(`assigned to ${f.assignedTo}`);
   if (f.reportedBy !== "all") filterBits.push(`reported by ${f.reportedBy}`);
   if (f.state !== "all") filterBits.push(f.state === "open" ? "open only" : "done only");
@@ -373,13 +404,14 @@ function buildReportText(tasks, f) {
       if (!!b.priority !== !!a.priority) return b.priority ? 1 : -1;
       return 0;
     });
-    lines.push(propertyLabel(prop).toUpperCase());
+    lines.push(propertyLabel(prop, labels).toUpperCase());
     for (const t of sorted) {
       const done = stateOf(t.status) === "Done";
+      const unitTag = t.unit ? ` [${t.unit}]` : "";
       const who = t.assignedTo ? ` -> ${t.assignedTo}` : "";
       const tag = done ? " (Done)" : t.priority ? " (Priority)" : "";
       const reported = t.reportedBy ? `  [reported by ${t.reportedBy}]` : "";
-      lines.push(`* ${t.title}${who}${tag}${reported}`);
+      lines.push(`* ${t.title}${unitTag}${who}${tag}${reported}`);
       if (t.notes) lines.push(`  ${t.notes.replace(/\n/g, " ")}`);
     }
     lines.push("");
@@ -387,7 +419,7 @@ function buildReportText(tasks, f) {
   return lines.join("\n");
 }
 
-function ReportModal({ tasks, contacts, onClose }) {
+function ReportModal({ tasks, contacts, properties, propertyLabels, onClose }) {
   const [preset, setPreset] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -415,12 +447,12 @@ function ReportModal({ tasks, contacts, onClose }) {
   }, [tasks]);
 
   const text = useMemo(
-    () => buildReportText(tasks, { from, to, property, assignedTo, reportedBy, state }),
-    [tasks, from, to, property, assignedTo, reportedBy, state]
+    () => buildReportText(tasks, { from, to, property, assignedTo, reportedBy, state }, propertyLabels),
+    [tasks, from, to, property, assignedTo, reportedBy, state, propertyLabels]
   );
 
   const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
-  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const selectField = "w-full rounded-md border border-white/40 bg-slate-950 pl-3 pr-8 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
   const lbl = "block text-xs font-semibold text-slate-300 mb-1";
 
   const copy = async () => {
@@ -469,7 +501,8 @@ function ReportModal({ tasks, contacts, onClose }) {
               <label className={lbl}>Which units</label>
               <select className={selectField} value={property} onChange={(e) => setProperty(e.target.value)}>
                 <option value="all">All properties</option>
-                {PROPERTIES.map((p) => <option key={p} value={p}>{propertyLabel(p)}</option>)}
+                {properties.map((p) => <option key={p.key} value={p.key}>{propertyLabel(p.key, propertyLabels)}</option>)}
+                {NON_PROPERTY_BUCKETS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div>
@@ -545,9 +578,224 @@ function DeleteAllModal({ count, onConfirm, onClose, deleting }) {
   );
 }
 
+/* --------------------------- Properties manager -------------------------- */
+
+function PropertyRow({ p, usedKeys, onSave, onDelete }) {
+  const [label, setLabel] = useState(p.label);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const dirty = label !== p.label;
+  const inUse = usedKeys.has(p.key);
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+      <input value={label} onChange={(e) => setLabel(e.target.value)}
+        onBlur={() => { if (dirty && label.trim()) onSave(p.key, { label: label.trim() }); }}
+        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300" />
+      <label className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-300">
+        <input type="checkbox" checked={p.is_active} onChange={(e) => onSave(p.key, { is_active: e.target.checked })}
+          className="h-3.5 w-3.5 rounded border-slate-500 bg-slate-950 text-white focus:ring-slate-300" />
+        Active
+      </label>
+      {confirmingDelete ? (
+        <button type="button" onClick={() => onDelete(p.key)}
+          className="shrink-0 rounded px-2 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15">Confirm?</button>
+      ) : (
+        <button type="button" disabled={inUse} onClick={() => setConfirmingDelete(true)}
+          title={inUse ? "In use — deactivate instead of deleting" : "Delete"}
+          className="shrink-0 rounded p-1.5 text-slate-500 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500">
+          <Trash2 size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PropertiesManagerModal({ properties, usedKeys, onSave, onAdd, onDelete, onClose, saving }) {
+  const [newName, setNewName] = useState("");
+  const sorted = useMemo(() => [...properties].sort((a, b) => a.sort_order - b.sort_order), [properties]);
+  const submitAdd = () => { const name = newName.trim(); if (name) { onAdd(name); setNewName(""); } };
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="mt-10 w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><Settings size={15} /> Manage properties</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="space-y-2 px-5 py-4">
+          {sorted.map((p) => <PropertyRow key={p.key} p={p} usedKeys={usedKeys} onSave={onSave} onDelete={onDelete} />)}
+          {sorted.length === 0 ? <p className="text-xs font-medium text-slate-500">No properties yet — add your first one below.</p> : null}
+        </div>
+        <div className="flex items-center gap-2 border-t border-slate-700 px-5 py-3">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submitAdd(); }}
+            placeholder="New property name…"
+            className="flex-1 rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300" />
+          <button type="button" onClick={submitAdd} disabled={!newName.trim() || saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+            <Plus size={15} /> Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------- Units --------------------------------- */
+
+function UnitModal({ unit, property, propertyLabels, onSave, onClose, saving }) {
+  const [draft, setDraft] = useState(unit || { property, label: "", sqft: "", tenant: "", furniture: "", paint_color: "", notes: "" });
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  const valid = draft.label.trim().length > 0;
+  const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const lbl = "block text-xs font-semibold text-slate-300 mb-1";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="mt-10 w-full max-w-sm rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
+          <h3 className="text-sm font-semibold text-white">{unit ? "Edit unit" : "Add unit"} <span className="font-normal text-slate-400">· {propertyLabel(property, propertyLabels)}</span></h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="space-y-3 px-5 py-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>Unit label</label>
+              <input className={field} value={draft.label} onChange={(e) => set("label", e.target.value)} placeholder="e.g. 900A" autoFocus />
+            </div>
+            <div>
+              <label className={lbl}>Sqft</label>
+              <input className={field} type="number" value={draft.sqft ?? ""} onChange={(e) => set("sqft", e.target.value)} placeholder="e.g. 600" />
+            </div>
+          </div>
+          <div>
+            <label className={lbl}>Tenant(s)</label>
+            <input className={field} value={draft.tenant} onChange={(e) => set("tenant", e.target.value)} placeholder="Who lives here" />
+          </div>
+          <div>
+            <label className={lbl}>Furniture</label>
+            <textarea className={field} rows={2} value={draft.furniture} onChange={(e) => set("furniture", e.target.value)} placeholder="Bed, dresser, sofa…" />
+          </div>
+          <div>
+            <label className={lbl}>Paint color</label>
+            <input className={field} value={draft.paint_color} onChange={(e) => set("paint_color", e.target.value)} placeholder="e.g. Swiss Coffee" />
+          </div>
+          <div>
+            <label className={lbl}>Notes</label>
+            <textarea className={field} rows={2} value={draft.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Anything else…" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
+          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+          <button type="button" disabled={!valid || saving}
+            onClick={() => onSave({ ...draft, property, label: draft.label.trim(), sqft: draft.sqft === "" || draft.sqft === null ? null : Number(draft.sqft) })}
+            className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+            {saving ? <Loader2 className="animate-spin" size={15} /> : null}
+            {unit ? "Save changes" : "Add unit"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UnitsView({ properties, propertyLabels, units, tasks, onSaveUnit, onDeleteUnit, savingUnit }) {
+  const [selectedProperty, setSelectedProperty] = useState(null);
+  const [editingUnit, setEditingUnit] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const sortedProps = useMemo(
+    () => [...properties].filter((p) => p.is_active).sort((a, b) => a.sort_order - b.sort_order),
+    [properties]
+  );
+  const propUnits = useMemo(() => units.filter((u) => u.property === selectedProperty), [units, selectedProperty]);
+
+  const saveAndClose = async (draft) => {
+    const ok = await onSaveUnit(draft);
+    if (ok) { setModalOpen(false); setEditingUnit(null); }
+  };
+
+  if (!selectedProperty) {
+    return (
+      <section>
+        <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-slate-300"><DoorOpen size={15} /> Units — pick a property</h2>
+        {sortedProps.length === 0 ? (
+          <p className="text-sm text-slate-500">No active properties yet.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {sortedProps.map((p) => {
+              const count = units.filter((u) => u.property === p.key).length;
+              return (
+                <button key={p.key} type="button" onClick={() => setSelectedProperty(p.key)}
+                  className="text-left rounded-xl border border-slate-700 bg-slate-900 p-4 hover:border-slate-500">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Building2 size={15} className="shrink-0 text-slate-400" />
+                    <span className="truncate text-sm font-semibold text-white">{propertyLabel(p.key, propertyLabels)}</span>
+                  </div>
+                  <div className="mt-3 text-xs font-medium text-slate-400">{count} unit{count === 1 ? "" : "s"}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <button type="button" onClick={() => setSelectedProperty(null)} className="flex items-center gap-1.5 text-sm font-semibold text-slate-300 hover:text-white">
+          <ArrowLeft size={15} /> {propertyLabel(selectedProperty, propertyLabels)}
+        </button>
+        <button type="button" onClick={() => { setEditingUnit(null); setModalOpen(true); }}
+          className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-200">
+          <Plus size={14} /> Add unit
+        </button>
+      </div>
+      {propUnits.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900 p-10 text-center text-sm text-slate-400">
+          No units added yet for this property.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {propUnits.map((u) => {
+            const openTaskCount = tasks.filter((t) => t.property === selectedProperty && t.unit === u.label && stateOf(t.status) !== "Done").length;
+            return (
+              <div key={u.id} className="rounded-xl border border-slate-700 bg-slate-900 p-4">
+                <button type="button" onClick={() => { setEditingUnit(u); setModalOpen(true); }} className="block w-full text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-white">{u.label}</span>
+                    {u.sqft ? <span className="text-xs font-medium text-slate-500">{u.sqft} sqft</span> : null}
+                  </div>
+                  {u.tenant ? <div className="mt-1.5 text-xs font-medium text-slate-300">{u.tenant}</div> : null}
+                  {u.furniture || u.paint_color ? (
+                    <div className="mt-2 flex flex-wrap gap-1 text-xs text-slate-500">
+                      {u.paint_color ? <span className="rounded bg-slate-800 px-1.5 py-0.5">{u.paint_color}</span> : null}
+                      {u.furniture ? <span className="max-w-[10rem] truncate rounded bg-slate-800 px-1.5 py-0.5">{u.furniture}</span> : null}
+                    </div>
+                  ) : null}
+                  {u.notes ? <p className="mt-2 text-xs text-slate-500">{u.notes}</p> : null}
+                  {openTaskCount ? <div className="mt-2 text-xs font-semibold text-amber-400">{openTaskCount} open task{openTaskCount === 1 ? "" : "s"}</div> : null}
+                </button>
+                <button type="button" onClick={() => onDeleteUnit(u.id)}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-red-400">
+                  <Trash2 size={12} /> Delete unit
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {modalOpen ? (
+        <UnitModal unit={editingUnit} property={selectedProperty} propertyLabels={propertyLabels} saving={savingUnit}
+          onSave={saveAndClose} onClose={() => { setModalOpen(false); setEditingUnit(null); }} />
+      ) : null}
+    </section>
+  );
+}
+
 /* ------------------------------- Task row ------------------------------- */
 
-function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetStatus, onEdit, onDelete, showProperty, calls, onAddCall, onToggleCall, onDeleteCall }) {
+function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetStatus, onEdit, onDelete, showProperty, propertyLabels, calls, onAddCall, onToggleCall, onDeleteCall }) {
   const st = stateOf(t.status);
   const meta = STATE_META[st];
   const age = daysSince(t.startDate);
@@ -575,7 +823,13 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
             ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-slate-400">
-            {showProperty ? <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">{propertyLabel(t.property)}</span> : null}
+            {showProperty ? (
+              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                {propertyLabel(t.property, propertyLabels)}{t.unit ? ` · ${t.unit}` : ""}
+              </span>
+            ) : t.unit ? (
+              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">{t.unit}</span>
+            ) : null}
             <span className="rounded px-1.5 py-0.5 font-semibold" style={{ color: meta.color, backgroundColor: meta.color + "1a", boxShadow: `inset 0 0 0 1px ${meta.color}55` }}>{t.status}</span>
             {t.reportedBy ? <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">Flagged by {t.reportedBy}</span> : null}
             {t.assignedTo ? <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-300">Fixing: {t.assignedTo}</span> : null}
@@ -648,7 +902,7 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
 
           <div className="flex items-center justify-between gap-2 pt-1">
             <select value={t.status} onChange={(e) => onSetStatus(t.id, e.target.value)}
-              className="rounded-md border border-white/40 bg-slate-900 px-2 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400"
+              className="rounded-md border border-white/40 bg-slate-900 pl-2 pr-7 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400"
               style={{ color: meta.color }}>
               {STATUSES.map((s) => <option key={s} value={s} style={{ color: "#f1f5f9", backgroundColor: "#0f172a" }}>{s}</option>)}
             </select>
@@ -668,10 +922,17 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
 export default function Tracker({ session, onSignOut }) {
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [properties, setProperties] = useState([]);
+  const [units, setUnits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  const [view, setView] = useState("tasks"); // tasks | units
+  const [propertiesModalOpen, setPropertiesModalOpen] = useState(false);
+  const [savingProperty, setSavingProperty] = useState(false);
+  const [savingUnit, setSavingUnit] = useState(false);
 
   const [stateFilter, setStateFilter] = useState("open"); // open | all | stale | <state>
   const [propFilter, setPropFilter] = useState("all");
@@ -739,15 +1000,27 @@ export default function Tracker({ session, onSignOut }) {
     setKeyDates(data || []);
   }, []);
 
+  const fetchProperties = useCallback(async () => {
+    const { data, error } = await supabase.from("properties").select("*").order("sort_order", { ascending: true });
+    if (error) return; // properties table may not exist yet until the migration runs
+    setProperties(data || []);
+  }, []);
+
+  const fetchUnits = useCallback(async () => {
+    const { data, error } = await supabase.from("units").select("*").order("label", { ascending: true });
+    if (error) return; // units table may not exist yet until the migration runs
+    setUnits(data || []);
+  }, []);
+
   // Initial load.
   useEffect(() => {
     (async () => {
       setLoading(true);
       await fetchTasks();
-      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates()]);
+      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits()]);
       setLoading(false);
     })();
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits]);
 
   // Live updates from teammates + refetch when returning to the tab.
   useEffect(() => {
@@ -758,15 +1031,17 @@ export default function Tracker({ session, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, () => fetchChecklist())
       .on("postgres_changes", { event: "*", schema: "public", table: "task_calls" }, () => fetchTaskCalls())
       .on("postgres_changes", { event: "*", schema: "public", table: "key_dates" }, () => fetchKeyDates())
+      .on("postgres_changes", { event: "*", schema: "public", table: "properties" }, () => fetchProperties())
+      .on("postgres_changes", { event: "*", schema: "public", table: "units" }, () => fetchUnits())
       .subscribe();
-    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); };
+    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); fetchProperties(); fetchUnits(); };
     window.addEventListener("focus", onFocus);
     return () => { supabase.removeChannel(channel); window.removeEventListener("focus", onFocus); };
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits]);
 
   const refresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates()]);
+    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits()]);
     setRefreshing(false);
   };
 
@@ -911,10 +1186,73 @@ export default function Tracker({ session, onSignOut }) {
     await fetchKeyDates();
   };
 
+  const addProperty = async (name) => {
+    setSavingProperty(true);
+    const sortOrder = properties.length ? Math.max(...properties.map((p) => p.sort_order)) + 1 : 1;
+    const { error } = await supabase.from("properties").insert({ key: name, label: name, is_active: true, sort_order: sortOrder });
+    if (error) setError(error.message + " (has the properties table migration been run yet?)");
+    await fetchProperties();
+    setSavingProperty(false);
+  };
+  const updateProperty = async (key, patch) => {
+    setProperties((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+    const { error } = await supabase.from("properties").update(patch).eq("key", key);
+    if (error) { setError(error.message); await fetchProperties(); }
+  };
+  const removeProperty = async (key) => {
+    const { error } = await supabase.from("properties").delete().eq("key", key);
+    if (error) { setError(error.message); return; }
+    await fetchProperties();
+  };
+  // A property still referenced anywhere shouldn't be deletable outright —
+  // deactivating hides it from nav/dropdowns without orphaning that data.
+  const propertyKeysInUse = useMemo(() => {
+    const set = new Set();
+    tasks.forEach((t) => set.add(t.property));
+    contacts.forEach((c) => set.add(c.property));
+    keyDates.forEach((k) => k.property && set.add(k.property));
+    checklist.forEach((c) => set.add(c.property));
+    units.forEach((u) => set.add(u.property));
+    return set;
+  }, [tasks, contacts, keyDates, checklist, units]);
+
+  const saveUnit = async (unit) => {
+    setSavingUnit(true);
+    let ok = true;
+    try {
+      if (unit.id) {
+        const { id, created_at, updated_at, ...rest } = unit;
+        const { error } = await supabase.from("units").update(rest).eq("id", id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("units").insert(unit);
+        if (error) throw error;
+      }
+      await fetchUnits();
+    } catch (e) {
+      setError(e.message || "Could not save unit. Has the units table migration been run yet?");
+      ok = false;
+    } finally {
+      setSavingUnit(false);
+    }
+    return ok;
+  };
+  const removeUnit = async (id) => {
+    const { error } = await supabase.from("units").delete().eq("id", id);
+    if (error) { setError(error.message); return; }
+    await fetchUnits();
+  };
+
+  const propertyLabels = useMemo(() => Object.fromEntries(properties.map((p) => [p.key, p.label])), [properties]);
+  const activeProperties = useMemo(
+    () => properties.filter((p) => p.is_active).sort((a, b) => a.sort_order - b.sort_order),
+    [properties]
+  );
+
   /* ----- metrics ----- */
   const metrics = useMemo(() => {
     const byState = Object.fromEntries(STATES.map((s) => [s, 0]));
-    const byProp = new Map(PROPERTIES.map((p) => [p, { total: 0, open: 0, priority: 0, stale: 0 }]));
+    const byProp = new Map(properties.map((p) => [p.key, { total: 0, open: 0, priority: 0, stale: 0 }]));
     let stale = 0, priority = 0;
     for (const t of tasks) {
       const st = stateOf(t.status);
@@ -934,9 +1272,10 @@ export default function Tracker({ session, onSignOut }) {
       carrie: byState["Waiting on Carrie"], stale, priority,
       propStats: Array.from(byProp, ([name, s]) => ({ name, ...s })),
     };
-  }, [tasks]);
+  }, [tasks, properties]);
 
-  const propertyCards = metrics.propStats.filter((p) => !NON_PROPERTY_BUCKETS.includes(p.name));
+  const activeKeySet = useMemo(() => new Set(activeProperties.map((p) => p.key)), [activeProperties]);
+  const propertyCards = metrics.propStats.filter((p) => activeKeySet.has(p.name));
   const propertyContacts = useMemo(
     () => contacts.filter((c) => c.property === propFilter || c.property === ALL_PROPERTIES),
     [contacts, propFilter]
@@ -1020,7 +1359,7 @@ export default function Tracker({ session, onSignOut }) {
   const toggleState = (s) => setStateFilter((prev) => (prev === s ? "open" : s));
   const toggleProperty = (p) => setPropFilter((prev) => (prev === p ? "all" : p));
 
-  const select = "rounded-md border border-white/40 bg-slate-900 px-2.5 py-2 text-sm font-medium text-slate-200 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const select = "rounded-md border border-white/40 bg-slate-900 pl-2.5 pr-8 py-2 text-sm font-medium text-slate-200 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -1030,21 +1369,35 @@ export default function Tracker({ session, onSignOut }) {
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-slate-900 font-bold">BH</div>
             <h1 className="text-xl font-bold tracking-tight text-white">Bay Homes Ops Tracker</h1>
+            <div className="ml-2 flex items-center gap-1 rounded-md border border-slate-700 bg-slate-950 p-0.5">
+              <button type="button" onClick={() => setView("tasks")}
+                className={"inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-semibold " + (view === "tasks" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white")}>
+                <ClipboardList size={14} /> Tasks
+              </button>
+              <button type="button" onClick={() => setView("units")}
+                className={"inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-semibold " + (view === "units" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white")}>
+                <DoorOpen size={14} /> Units
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={refresh} title="Refresh" className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
               <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
             </button>
-            <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
-              <Download size={15} /> CSV
-            </button>
-            <button type="button" onClick={() => setReportModalOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
-              <FileText size={15} /> Report
-            </button>
-            <button type="button" onClick={() => openAdd(propFilter !== "all" ? { property: propFilter } : null)}
-              className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
-              <Plus size={16} /> Add task
-            </button>
+            {view === "tasks" ? (
+              <>
+                <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+                  <Download size={15} /> CSV
+                </button>
+                <button type="button" onClick={() => setReportModalOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+                  <FileText size={15} /> Report
+                </button>
+                <button type="button" onClick={() => openAdd(propFilter !== "all" ? { property: propFilter } : null)}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
+                  <Plus size={16} /> Add task
+                </button>
+              </>
+            ) : null}
             <button type="button" onClick={onSignOut} title="Sign out" className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">
               <LogOut size={15} />
             </button>
@@ -1060,6 +1413,16 @@ export default function Tracker({ session, onSignOut }) {
           </div>
         ) : null}
 
+        {view === "units" ? (
+          loading ? (
+            <div className="flex h-64 items-center justify-center text-slate-500"><Loader2 className="animate-spin" size={22} /></div>
+          ) : (
+            <UnitsView properties={properties} propertyLabels={propertyLabels} units={units} tasks={tasks}
+              onSaveUnit={saveUnit} onDeleteUnit={removeUnit} savingUnit={savingUnit} />
+          )
+        ) : (
+        <>
+
         {!loading && upcomingKeyDates.length > 0 ? (
           <div className="rounded-lg bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-300 ring-1 ring-inset ring-amber-500/40">
             <div className="mb-1 flex items-center gap-1.5 font-semibold"><Bell size={14} /> Coming up</div>
@@ -1068,7 +1431,7 @@ export default function Tracker({ session, onSignOut }) {
                 const dLeft = daysUntil(k.month, k.day);
                 return (
                   <li key={k.id}>
-                    {k.title}{k.property ? ` — ${propertyLabel(k.property)}` : ""} · {MONTHS[k.month - 1]} {k.day}
+                    {k.title}{k.property ? ` — ${propertyLabel(k.property, propertyLabels)}` : ""} · {MONTHS[k.month - 1]} {k.day}
                     {" "}<span className="text-amber-400">({dLeft === 0 ? "today" : dLeft === 1 ? "tomorrow" : `in ${dLeft}d`})</span>
                   </li>
                 );
@@ -1097,7 +1460,13 @@ export default function Tracker({ session, onSignOut }) {
 
             {/* Properties — primary navigation */}
             <section>
-              <h2 className="mb-3 text-sm font-semibold text-slate-300">Properties</h2>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-300">Properties</h2>
+                <button type="button" onClick={() => setPropertiesModalOpen(true)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
+                  <Settings size={13} /> Manage
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                 {propertyCards.map((p) => {
                   const active = propFilter === p.name;
@@ -1110,7 +1479,7 @@ export default function Tracker({ session, onSignOut }) {
                       }>
                       <div className="flex items-center gap-2 min-w-0">
                         <Building2 size={15} className="shrink-0 text-slate-400" />
-                        <span className="truncate text-sm font-semibold text-white">{propertyLabel(p.name)}</span>
+                        <span className="truncate text-sm font-semibold text-white">{propertyLabel(p.name, propertyLabels)}</span>
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-slate-400">
                         <span>{p.open} open</span>
@@ -1146,12 +1515,12 @@ export default function Tracker({ session, onSignOut }) {
                 {!showAllKeyDates && upcomingKeyDates.length === 0 ? (
                   <p className="text-xs font-medium text-slate-500">Nothing due in the next {KEY_DATE_ALERT_DAYS} days.</p>
                 ) : null}
-                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
                   {(showAllKeyDates ? sortedKeyDates : upcomingKeyDates).map((k) => {
                     const dLeft = daysUntil(k.month, k.day);
                     const soon = dLeft <= 7;
                     return (
-                      <div key={k.id} className="flex items-start justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                      <div key={k.id} className="flex w-64 shrink-0 items-start justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-white">{k.title}</div>
                           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium text-slate-500">
@@ -1159,7 +1528,7 @@ export default function Tracker({ session, onSignOut }) {
                             <span className={soon ? "text-red-400" : dLeft <= KEY_DATE_ALERT_DAYS ? "text-amber-400" : ""}>
                               {dLeft === 0 ? "today" : dLeft === 1 ? "tomorrow" : `in ${dLeft}d`}
                             </span>
-                            {k.property ? <span>· {propertyLabel(k.property)}</span> : null}
+                            {k.property ? <span>· {propertyLabel(k.property, propertyLabels)}</span> : null}
                           </div>
                           {k.notes ? <p className="mt-1 text-xs text-slate-400">{k.notes}</p> : null}
                         </div>
@@ -1186,7 +1555,7 @@ export default function Tracker({ session, onSignOut }) {
             {propFilter !== "all" && !NON_PROPERTY_BUCKETS.includes(propFilter) ? (
               <section className="rounded-xl border border-slate-700 bg-slate-900 p-4">
                 <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-slate-300">
-                  <Users size={15} /> Contacts & checklists <span className="font-normal text-slate-500">· {propertyLabel(propFilter)}</span>
+                  <Users size={15} /> Contacts & checklists <span className="font-normal text-slate-500">· {propertyLabel(propFilter, propertyLabels)}</span>
                 </h2>
                 <div className="flex flex-wrap gap-2">
                   {categoriesForProperty.map((cat) => {
@@ -1294,7 +1663,7 @@ export default function Tracker({ session, onSignOut }) {
               </select>
               {propFilter !== "all" ? (
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-800 pl-2.5 pr-1.5 py-1.5 text-sm font-medium text-slate-200">
-                  {propertyLabel(propFilter)}
+                  {propertyLabel(propFilter, propertyLabels)}
                   <button type="button" onClick={() => setPropFilter("all")} className="rounded p-0.5 text-slate-400 hover:text-white"><X size={13} /></button>
                 </span>
               ) : null}
@@ -1305,7 +1674,11 @@ export default function Tracker({ session, onSignOut }) {
             {/* Task list, grouped by category */}
             <section className="space-y-5">
               {groups.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900 p-10 text-center text-sm text-slate-400">
+                <div className="relative rounded-xl border border-dashed border-slate-700 bg-slate-900 p-10 text-center text-sm text-slate-400">
+                  <button type="button" onClick={() => openAdd(propFilter !== "all" ? { property: propFilter } : null)}
+                    className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-200">
+                    <Plus size={14} /> Add task
+                  </button>
                   No tasks match these filters. <button type="button" onClick={clearFilters} className="font-semibold text-white underline">Show everything</button>
                 </div>
               ) : (
@@ -1319,7 +1692,7 @@ export default function Tracker({ session, onSignOut }) {
                           {type} <span className="font-normal text-slate-500">({items.length})</span>
                         </button>
                         <button type="button"
-                          onClick={() => openAdd({ type, property: propFilter !== "all" ? propFilter : PROPERTIES[0] })}
+                          onClick={() => openAdd({ type, property: propFilter !== "all" ? propFilter : (activeProperties[0]?.key || "") })}
                           className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
                           <Plus size={13} /> Add
                         </button>
@@ -1331,7 +1704,7 @@ export default function Tracker({ session, onSignOut }) {
                               onToggleOpen={() => setExpanded(expanded === t.id ? null : t.id)}
                               onQuickDone={quickDone} onTogglePriority={togglePriority}
                               onSetStatus={setStatus} onEdit={openEdit} onDelete={removeTask}
-                              showProperty={propFilter === "all"}
+                              showProperty={propFilter === "all"} propertyLabels={propertyLabels}
                               calls={taskCalls.filter((c) => c.task_id === t.id)}
                               onAddCall={(text) => addTaskCall(t.id, text)}
                               onToggleCall={toggleTaskCall} onDeleteCall={removeTaskCall} />
@@ -1355,25 +1728,34 @@ export default function Tracker({ session, onSignOut }) {
             </footer>
           </>
         )}
+        </>
+        )}
       </main>
 
       {modalOpen ? (
-        <TaskModal task={editing} prefill={addPrefill} contacts={contacts} saving={saving} onSave={saveTask}
+        <TaskModal task={editing} prefill={addPrefill} contacts={contacts} properties={properties} units={units} propertyLabels={propertyLabels}
+          saving={saving} onSave={saveTask}
           onClose={() => { setModalOpen(false); setEditing(null); setAddPrefill(null); }} />
       ) : null}
 
       {contactModalOpen ? (
-        <ContactModal contact={editingContact} property={propFilter} prefillRole={contactCategory} saving={savingContact} onSave={saveContact}
+        <ContactModal contact={editingContact} property={propFilter} prefillRole={contactCategory} propertyLabels={propertyLabels} saving={savingContact} onSave={saveContact}
           onClose={() => { setContactModalOpen(false); setEditingContact(null); }} />
       ) : null}
 
       {keyDateModalOpen ? (
-        <KeyDateModal keyDate={editingKeyDate} saving={savingKeyDate} onSave={saveKeyDate}
+        <KeyDateModal keyDate={editingKeyDate} properties={properties} propertyLabels={propertyLabels} saving={savingKeyDate} onSave={saveKeyDate}
           onClose={() => { setKeyDateModalOpen(false); setEditingKeyDate(null); }} />
       ) : null}
 
       {reportModalOpen ? (
-        <ReportModal tasks={tasks} contacts={contacts} onClose={() => setReportModalOpen(false)} />
+        <ReportModal tasks={tasks} contacts={contacts} properties={properties} propertyLabels={propertyLabels} onClose={() => setReportModalOpen(false)} />
+      ) : null}
+
+      {propertiesModalOpen ? (
+        <PropertiesManagerModal properties={properties} usedKeys={propertyKeysInUse} saving={savingProperty}
+          onSave={updateProperty} onAdd={addProperty} onDelete={removeProperty}
+          onClose={() => setPropertiesModalOpen(false)} />
       ) : null}
 
       {deleteAllModalOpen ? (
