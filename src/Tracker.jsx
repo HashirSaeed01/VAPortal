@@ -3,12 +3,13 @@ import {
   Plus, Trash2, Pencil, X, Download, Search, AlertTriangle, CheckCircle2,
   Clock, Loader2, UserCheck, ChevronDown, ChevronRight,
   RefreshCw, LogOut, Flag, FileText, Building2, Phone, Mail, Users, Bell, PhoneCall,
+  CalendarRange, Copy, Check,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import {
   PROPERTIES, TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF,
   NON_PROPERTY_BUCKETS, CONTACT_ROLES, ALL_PROPERTIES, KEY_DATE_ALERT_DAYS,
-  propertyLabel, stateOf, daysSince, daysUntil, SEED,
+  propertyLabel, stateOf, daysSince, daysUntil, parseDate,
 } from "./data.js";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -279,6 +280,130 @@ function KeyDateModal({ keyDate, onSave, onClose, saving }) {
   );
 }
 
+// Builds a plain-text rundown of every task whose date falls in [from, to]
+// (inclusive), grouped by date — the thing you'd paste into a message.
+function buildDateRangeText(tasks, from, to) {
+  const fromDate = from ? new Date(from + "T00:00:00") : null;
+  const toDate = to ? new Date(to + "T23:59:59") : null;
+  const inRange = tasks.filter((t) => {
+    const d = parseDate(t.startDate);
+    if (!d) return false;
+    if (fromDate && d < fromDate) return false;
+    if (toDate && d > toDate) return false;
+    return true;
+  });
+  const byDate = new Map();
+  for (const t of inRange) {
+    if (!byDate.has(t.startDate)) byDate.set(t.startDate, []);
+    byDate.get(t.startDate).push(t);
+  }
+  const sortedDates = Array.from(byDate.keys()).sort((a, b) => parseDate(a) - parseDate(b));
+  const rangeLabel = from && to ? `${from} to ${to}` : from ? `from ${from}` : to ? `through ${to}` : "all dated tasks";
+  const lines = [`BAY HOMES — TASKS ${rangeLabel}`, `Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`, ""];
+  if (sortedDates.length === 0) {
+    lines.push("No dated tasks fall in this range.");
+  }
+  for (const date of sortedDates) {
+    lines.push(date);
+    for (const t of byDate.get(date)) {
+      const done = stateOf(t.status) === "Done";
+      const who = t.assignedTo ? ` -> ${t.assignedTo}` : "";
+      lines.push(`* ${t.title} (${propertyLabel(t.property)})${who} — ${t.status}${done ? " [Done]" : ""}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+function DateRangeModal({ tasks, onClose }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [copied, setCopied] = useState(false);
+  const text = useMemo(() => buildDateRangeText(tasks, from, to), [tasks, from, to]);
+  const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  const lbl = "block text-xs font-semibold text-slate-300 mb-1";
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { /* clipboard permission denied — user can still select & copy manually */ }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="mt-10 w-full max-w-xl rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><CalendarRange size={16} /> Tasks by date range</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="space-y-3 px-5 py-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>From</label>
+              <input type="date" className={field} value={from} onChange={(e) => setFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className={lbl}>To</label>
+              <input type="date" className={field} value={to} onChange={(e) => setTo(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <label className={lbl.replace("mb-1", "mb-0")}>Text</label>
+              <button type="button" onClick={copy}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
+                {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />} {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <textarea readOnly value={text} rows={12}
+              className="w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:outline-none" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
+          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Close</button>
+          <button type="button" onClick={() => downloadFile(`bay-homes-tasks-${from || "start"}-to-${to || "end"}.txt`, text, "text/plain")}
+            className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
+            <Download size={15} /> Download
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteAllModal({ count, onConfirm, onClose, deleting }) {
+  const [text, setText] = useState("");
+  const ready = text.trim().toUpperCase() === "DELETE";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.8)" }} onClick={onClose}>
+      <div className="mt-10 w-full max-w-sm rounded-2xl bg-slate-900 border border-red-500/40 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-red-400"><Trash2 size={16} /> Delete all tasks</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="space-y-3 px-5 py-4 text-sm">
+          <p className="text-slate-200">
+            This permanently deletes <span className="font-bold text-white">all {count} tasks</span> for every team member. Contacts, checklists,
+            and key dates are not affected. <span className="font-semibold text-red-400">This cannot be undone.</span>
+          </p>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-300">Type DELETE to confirm</label>
+            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="DELETE"
+              className="w-full rounded-md border border-red-500/40 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-400" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
+          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+          <button type="button" disabled={!ready || deleting} onClick={onConfirm}
+            className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-40">
+            {deleting ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />}
+            Delete all {count} tasks
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------- Task row ------------------------------- */
 
 function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetStatus, onEdit, onDelete, showProperty, calls, onAddCall, onToggleCall, onDeleteCall }) {
@@ -435,6 +560,10 @@ export default function Tracker({ session, onSignOut }) {
   const [savingKeyDate, setSavingKeyDate] = useState(false);
   const [showAllKeyDates, setShowAllKeyDates] = useState(false);
 
+  const [dateRangeModalOpen, setDateRangeModalOpen] = useState(false);
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
+
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
 
@@ -469,19 +598,11 @@ export default function Tracker({ session, onSignOut }) {
     setKeyDates(data || []);
   }, []);
 
-  // Initial load — seed the tasks table on first run if it's empty.
+  // Initial load.
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const { data, error } = await supabase.from("tasks").select("*").order("created_at", { ascending: false });
-      if (error) { setError(error.message); setLoading(false); return; }
-      if (!data || data.length === 0) {
-        const { error: seedErr } = await supabase.from("tasks").insert(SEED.map(toRow));
-        if (seedErr) setError(seedErr.message);
-        await fetchTasks();
-      } else {
-        setTasks(data.map(fromRow));
-      }
+      await fetchTasks();
       await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates()]);
       setLoading(false);
     })();
@@ -534,6 +655,15 @@ export default function Tracker({ session, onSignOut }) {
     const { error } = await supabase.from("tasks").delete().eq("id", id);
     if (error) { setError(error.message); return; }
     await fetchTasks();
+  };
+
+  const removeAllTasks = async () => {
+    setDeletingAll(true);
+    const { error } = await supabase.from("tasks").delete().not("id", "is", null);
+    if (error) setError(error.message);
+    await fetchTasks();
+    setDeletingAll(false);
+    setDeleteAllModalOpen(false);
   };
 
   const setStatus = async (id, status) => {
@@ -803,6 +933,9 @@ export default function Tracker({ session, onSignOut }) {
             </button>
             <button type="button" onClick={exportReport} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
               <FileText size={15} /> Report
+            </button>
+            <button type="button" onClick={() => setDateRangeModalOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+              <CalendarRange size={15} /> By date
             </button>
             <button type="button" onClick={() => openAdd(propFilter !== "all" ? { property: propFilter } : null)}
               className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200">
@@ -1109,6 +1242,12 @@ export default function Tracker({ session, onSignOut }) {
 
             <footer className="pt-2 pb-8 text-center text-xs font-medium text-slate-500">
               Live shared database · changes sync to everyone on the team in real time
+              <div className="mt-3">
+                <button type="button" onClick={() => setDeleteAllModalOpen(true)}
+                  className="text-slate-700 hover:text-red-400">
+                  Delete all tasks…
+                </button>
+              </div>
             </footer>
           </>
         )}
@@ -1127,6 +1266,15 @@ export default function Tracker({ session, onSignOut }) {
       {keyDateModalOpen ? (
         <KeyDateModal keyDate={editingKeyDate} saving={savingKeyDate} onSave={saveKeyDate}
           onClose={() => { setKeyDateModalOpen(false); setEditingKeyDate(null); }} />
+      ) : null}
+
+      {dateRangeModalOpen ? (
+        <DateRangeModal tasks={tasks} onClose={() => setDateRangeModalOpen(false)} />
+      ) : null}
+
+      {deleteAllModalOpen ? (
+        <DeleteAllModal count={tasks.length} deleting={deletingAll} onConfirm={removeAllTasks}
+          onClose={() => setDeleteAllModalOpen(false)} />
       ) : null}
     </div>
   );
