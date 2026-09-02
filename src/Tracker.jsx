@@ -390,10 +390,20 @@ function buildReportText(tasks, f, labels) {
     if (!byProp.has(t.property)) byProp.set(t.property, []);
     byProp.get(t.property).push(t);
   }
+
+  const RULE = "═".repeat(46);
+  const THIN = "─".repeat(46);
+  const openCount = filtered.filter((t) => stateOf(t.status) !== "Done").length;
+  const doneCount = filtered.length - openCount;
+
   const lines = [
-    "BAY HOMES — TASK REPORT",
-    filterBits.length ? filterBits.join(" · ") : "All tasks",
-    `Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`,
+    RULE,
+    "  BAY HOMES — TASK REPORT",
+    RULE,
+    `  ${filterBits.length ? filterBits.join(" · ") : "All tasks"}`,
+    `  Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`,
+    `  ${filtered.length} task${filtered.length === 1 ? "" : "s"} · ${openCount} open · ${doneCount} done`,
+    RULE,
     "",
   ];
   if (filtered.length === 0) lines.push("No tasks match these filters.");
@@ -404,18 +414,21 @@ function buildReportText(tasks, f, labels) {
       if (!!b.priority !== !!a.priority) return b.priority ? 1 : -1;
       return 0;
     });
-    lines.push(propertyLabel(prop, labels).toUpperCase());
+    lines.push(`▸ ${propertyLabel(prop, labels).toUpperCase()}  (${items.length})`);
+    lines.push(THIN);
     for (const t of sorted) {
       const done = stateOf(t.status) === "Done";
+      const box = done ? "✔" : "☐";
+      const star = !done && t.priority ? " ★" : "";
       const unitTag = t.unit ? ` [${t.unit}]` : "";
-      const who = t.assignedTo ? ` -> ${t.assignedTo}` : "";
-      const tag = done ? " (Done)" : t.priority ? " (Priority)" : "";
-      const reported = t.reportedBy ? `  [reported by ${t.reportedBy}]` : "";
-      lines.push(`* ${t.title}${unitTag}${who}${tag}${reported}`);
-      if (t.notes) lines.push(`  ${t.notes.replace(/\n/g, " ")}`);
+      const who = t.assignedTo ? ` → ${t.assignedTo}` : "";
+      const reported = t.reportedBy ? ` (reported by ${t.reportedBy})` : "";
+      lines.push(`  ${box}${star} ${t.title}${unitTag}${who}${reported}`);
+      if (t.notes) lines.push(`      ↳ ${t.notes.replace(/\n/g, " ")}`);
     }
     lines.push("");
   }
+  if (filtered.length > 0) lines.push(RULE);
   return lines.join("\n");
 }
 
