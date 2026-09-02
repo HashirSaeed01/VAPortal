@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import {
-  PROPERTIES, TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF,
+  PROPERTIES, TYPES, STATUSES, STATES, STATE_META, STALE_DAYS, STAFF, ASSIGNABLE_STAFF,
   NON_PROPERTY_BUCKETS, CONTACT_ROLES, ALL_PROPERTIES, KEY_DATE_ALERT_DAYS,
   propertyLabel, stateOf, daysSince, daysUntil, parseDate,
 } from "./data.js";
@@ -127,7 +127,7 @@ function TaskModal({ task, prefill, onSave, onClose, saving }) {
             </div>
             <div>
               <label className={lbl}>Assigned to</label>
-              <Combobox field={field} options={STAFF} value={draft.assignedTo} onChange={(v) => set("assignedTo", v)} placeholder="Who's fixing it?" />
+              <Combobox field={field} options={ASSIGNABLE_STAFF} value={draft.assignedTo} onChange={(v) => set("assignedTo", v)} placeholder="Who's fixing it?" />
             </div>
             <div>
               <label className={lbl}>Status</label>
@@ -380,7 +380,7 @@ function ReportModal({ tasks, contacts, onClose }) {
   // Contractors/assignees: real vendor directory + staff + anything already
   // typed into a task, so the list survives even if tasks get wiped.
   const assignees = useMemo(() => {
-    const set = new Set(STAFF);
+    const set = new Set(ASSIGNABLE_STAFF);
     contacts.forEach((c) => { if (c.name) set.add(c.name); });
     tasks.forEach((t) => { if (t.assignedTo) set.add(t.assignedTo); });
     return Array.from(set).sort();

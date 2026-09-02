@@ -31,6 +31,11 @@ export const STAFF = [
   "Carrie", "Luis", "Benny", "Kevin", "Sylvia", "Leo", "Pablo", "Ryan", "Mariam", "Hashir",
 ];
 
+// Office/admin — can report issues but aren't the ones fixing them, so they
+// shouldn't show up as "assigned to" / contractor suggestions.
+export const NON_CONTRACTOR_STAFF = ["Mariam", "Hashir"];
+export const ASSIGNABLE_STAFF = STAFF.filter((s) => !NON_CONTRACTOR_STAFF.includes(s));
+
 // Suggestions only — trade/role of a property's contractor or vendor.
 export const CONTACT_ROLES = [
   "Plumber", "Electrician", "Handyman", "Locksmith", "HVAC", "Appliance Repair",
