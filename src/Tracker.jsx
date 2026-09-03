@@ -812,63 +812,96 @@ function UnitsView({ properties, propertyLabels, units, tasks, onSaveUnit, onDel
 
 /* ---------------------------- Recheck timeline --------------------------- */
 
-// A growing chain: one circle per check-in today, connected by a line whose
-// length reflects the gap since the previous one — a long line means it's
-// been a while. A final hollow circle marks the next check that's due,
-// pulsing amber once its 2-hour window opens and red once it's overdue.
+// A fixed schedule, not just a log of what happened — a checkpoint every 2
+// working hours, advancing on its own whether or not anyone shows up. Past
+// checkpoints that got no check-in read as missed; the current one pulses
+// amber (or red once it's also overdue) until someone checks in.
+const RECHECK_HOURS = [8, 10, 12, 14, 16, 18, 20, 22];
+const RECHECK_INTERVAL_MINS = 120;
+
 function timeAgoLabel(mins) {
   if (mins < 60) return `${mins}m`;
   return `${Math.round(mins / 60)}h`;
 }
+function formatHour(h) {
+  const period = h < 12 ? "AM" : "PM";
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}${period}`;
+}
 
-function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error }) {
-  const chain = useMemo(
-    () => [...checkins].sort((a, b) => new Date(a.checked_at) - new Date(b.checked_at)),
-    [checkins]
-  );
-  const now = Date.now();
-  const last = chain[chain.length - 1];
-  const minsSinceLast = last ? Math.round((now - new Date(last.checked_at).getTime()) / 60000) : null;
-  const overdue = minsSinceLast === null || minsSinceLast >= 120;
-  const dueSoon = !overdue && minsSinceLast >= 90;
-  const sameAsLast = !!(last && currentUser && last.person === currentUser);
-  const lineHeight = (mins) => Math.max(28, Math.min(96, mins * 1.1));
+// Ticks once a minute so the schedule keeps advancing even when nothing
+// else on the page changes — a missed checkpoint has to show up on its
+// own, not only after someone triggers a re-render.
+function useClockTick(intervalMs = 60000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, lastCheckin, minsSinceLast, overdue, cycleSkipped }) {
+  const now = useClockTick();
+  const checkpoints = useMemo(() => {
+    const list = [];
+    const nowDate = new Date(now);
+    for (const h of RECHECK_HOURS) {
+      const start = new Date(now); start.setHours(h, 0, 0, 0);
+      if (start > nowDate) break; // stop at the first window that hasn't opened yet
+      const end = new Date(start); end.setHours(end.getHours() + 2);
+      const inWindow = checkins.filter((c) => { const t = new Date(c.checked_at); return t >= start && t < end; });
+      list.push({ h, inWindow, current: nowDate < end });
+    }
+    return list;
+  }, [checkins, now]);
 
   return (
     <aside className="hidden xl:flex sticky top-24 w-48 shrink-0 flex-col self-start rounded-xl border border-slate-700 bg-slate-900 p-4">
       <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-300"><Clock size={13} /> Recheck timeline</div>
       <div className="mb-4 text-xs font-medium text-slate-500">
-        {last ? `Last check ${timeAgoLabel(minsSinceLast)} ago` : "No checks yet today"}
+        {lastCheckin ? `Last check ${timeAgoLabel(minsSinceLast)} ago` : "No checks yet today"}
       </div>
 
       <div className="flex flex-1 flex-col items-center overflow-y-auto py-1">
-        {chain.map((c, i) => (
-          <div key={c.id} className="flex flex-col items-center">
-            {i > 0 ? <div className="w-px bg-slate-700" style={{ height: lineHeight(Math.round((new Date(c.checked_at) - new Date(chain[i - 1].checked_at)) / 60000)) }} /> : null}
-            <span className="h-4 w-4 shrink-0 rounded-full border-2 border-emerald-400 bg-emerald-400" />
-            <div className="mt-1.5 max-w-[7rem] truncate text-center text-xs font-semibold text-slate-200">{c.person}</div>
-            <div className="text-[10px] text-slate-500">{new Date(c.checked_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>
-          </div>
-        ))}
+        {checkpoints.length === 0 ? (
+          <div className="px-1 text-center text-[11px] text-slate-500">Schedule starts at {formatHour(RECHECK_HOURS[0])}</div>
+        ) : null}
+        {checkpoints.map((cp, i) => {
+          const checked = cp.inWindow.length > 0;
+          const missed = !cp.current && !checked;
+          return (
+            <div key={cp.h} className="flex flex-col items-center">
+              {i > 0 ? <div className="w-px h-12 bg-slate-700" /> : null}
+              <span className={
+                "h-4 w-4 shrink-0 rounded-full border-2 " +
+                (checked ? "border-emerald-400 bg-emerald-400"
+                  : cp.current ? (overdue ? "border-red-500 animate-pulse" : "border-amber-400 animate-pulse")
+                  : "border-red-500/70")
+              } />
+              <div className="mt-1.5 text-center text-[10px] font-medium text-slate-500">{formatHour(cp.h)}</div>
+              {checked ? (
+                <div className="max-w-[7rem] truncate text-center text-xs font-semibold text-emerald-300">{cp.inWindow.map((c) => c.person).join(", ")}</div>
+              ) : cp.current ? (
+                <div className={"text-center text-xs font-semibold " + (overdue ? "text-red-400" : "text-amber-400")}>Check now</div>
+              ) : missed ? (
+                <div className="text-center text-xs font-semibold text-red-400/80">Missed</div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
 
-        {/* Next check due */}
-        <div className="flex flex-col items-center">
-          {chain.length ? <div className="w-px bg-slate-700" style={{ height: lineHeight(minsSinceLast) }} /> : null}
-          <span className={
-            "h-4 w-4 shrink-0 rounded-full border-2 " +
-            (overdue ? "border-red-500 animate-pulse" : dueSoon ? "border-amber-400 animate-pulse" : "border-slate-600")
-          } />
-          <div className={"mt-1.5 text-center text-xs font-semibold " + (overdue ? "text-red-400" : dueSoon ? "text-amber-400" : "text-slate-500")}>
-            {overdue ? "Recheck now" : "Next due"}
-          </div>
-        </div>
+      <div className="mb-3 rounded-md border border-slate-700 bg-slate-950 px-2.5 py-2 text-[11px] leading-snug text-slate-400">
+        Also check <span className="text-slate-300">email</span>, <span className="text-slate-300">SMS</span>, and{" "}
+        <span className="text-slate-300">Hospitable</span> for new messages.
       </div>
 
       {error ? <div className="mb-2 text-center text-[11px] font-medium text-red-400">{error}</div> : null}
-      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn || sameAsLast}
-        className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn || (!cycleSkipped && lastCheckin?.person === currentUser)}
+        className="flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
         {checkingIn ? <Loader2 className="animate-spin" size={13} /> : <CheckCircle2 size={13} />}
-        {sameAsLast ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
+        {!cycleSkipped && lastCheckin?.person === currentUser ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
       </button>
     </aside>
   );
@@ -1069,6 +1102,17 @@ export default function Tracker({ session, onSignOut }) {
   const [checkins, setCheckins] = useState([]);
   const [checkingIn, setCheckingIn] = useState(false);
   const [checkinError, setCheckinError] = useState(null);
+  const checkinNow = useClockTick();
+  const lastCheckin = useMemo(
+    () => (checkins.length ? checkins.reduce((a, b) => (new Date(a.checked_at) > new Date(b.checked_at) ? a : b)) : null),
+    [checkins]
+  );
+  const minsSinceLastCheckin = useMemo(
+    () => (lastCheckin ? Math.round((checkinNow - new Date(lastCheckin.checked_at).getTime()) / 60000) : null),
+    [lastCheckin, checkinNow]
+  );
+  const checkinOverdue = minsSinceLastCheckin === null || minsSinceLastCheckin >= RECHECK_INTERVAL_MINS;
+  const checkinCycleSkipped = minsSinceLastCheckin !== null && minsSinceLastCheckin >= RECHECK_INTERVAL_MINS * 2;
 
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
@@ -1162,10 +1206,9 @@ export default function Tracker({ session, onSignOut }) {
     setCheckinError(null);
     // The point of the timeline is a second set of eyes — the same person
     // checking in twice in a row doesn't prove anything got re-reviewed.
-    const lastToday = checkins.length
-      ? checkins.reduce((a, b) => (new Date(a.checked_at) > new Date(b.checked_at) ? a : b))
-      : null;
-    if (lastToday && lastToday.person === currentUser) {
+    // But if a whole extra cycle goes by with nobody else stepping in, let
+    // them do it anyway — something checked beats nothing checked.
+    if (lastCheckin && lastCheckin.person === currentUser && !checkinCycleSkipped) {
       setCheckinError("You already checked in last — have someone else check in next.");
       return;
     }
@@ -1579,8 +1622,17 @@ export default function Tracker({ session, onSignOut }) {
               onSaveUnit={saveUnit} onDeleteUnit={removeUnit} savingUnit={savingUnit} />
           )
         ) : (
-        <div className="flex items-start gap-6">
+        <div className="flex items-start gap-12">
         <div className="min-w-0 flex-1 max-w-6xl space-y-6">
+
+        {!loading && checkinOverdue ? (
+          <div className="flex items-center gap-2 rounded-lg bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 ring-1 ring-inset ring-red-500/40">
+            <Clock size={14} className="shrink-0" />
+            {lastCheckin
+              ? `Recheck overdue — last checked by ${lastCheckin.person} ${timeAgoLabel(minsSinceLastCheckin)} ago. Someone else should check the to-do list now.`
+              : "No one has checked the to-do list today yet — check it now."}
+          </div>
+        ) : null}
 
         {!loading && upcomingKeyDates.length > 0 ? (
           <div className="rounded-lg bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-300 ring-1 ring-inset ring-amber-500/40">
@@ -1895,7 +1947,8 @@ export default function Tracker({ session, onSignOut }) {
         )}
         </div>
         {!loading ? (
-          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} error={checkinError} />
+          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} error={checkinError}
+            lastCheckin={lastCheckin} minsSinceLast={minsSinceLastCheckin} overdue={checkinOverdue} cycleSkipped={checkinCycleSkipped} />
         ) : null}
         </div>
         )}
