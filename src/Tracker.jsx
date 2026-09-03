@@ -33,7 +33,7 @@ const fromRow = (r) => ({
   id: r.id, title: r.title, property: r.property, type: r.type,
   startDate: r.start_date || "", status: r.status, notes: r.notes || "",
   reportedBy: r.reported_by || "", assignedTo: r.assigned_to || "", priority: !!r.priority,
-  unit: r.unit || "",
+  unit: r.unit || "", createdAt: r.created_at || "",
 });
 
 function csvEscape(v) {
@@ -945,7 +945,7 @@ export default function Tracker({ session, onSignOut }) {
   const [propFilter, setPropFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState(false);
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState("recent"); // recent | dateAsc | dateDesc
+  const [sortBy, setSortBy] = useState("newestAdded"); // newestAdded | oldestAdded | dateAsc | dateDesc
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -1347,8 +1347,17 @@ export default function Tracker({ session, onSignOut }) {
       map.get(t.type).push(t);
     }
     let result = Array.from(map, ([type, items]) => ({ type, items })).filter((g) => g.items.length > 0);
-    if (sortBy !== "recent") {
-      // Tasks with no start date sort to the end regardless of direction.
+    if (sortBy === "newestAdded" || sortBy === "oldestAdded") {
+      // Every task has a created_at, so this always has something to sort by.
+      result = result.map(({ type, items }) => ({
+        type,
+        items: [...items].sort((a, b) => {
+          const diff = new Date(a.createdAt) - new Date(b.createdAt);
+          return sortBy === "oldestAdded" ? diff : -diff;
+        }),
+      }));
+    } else if (sortBy === "dateAsc" || sortBy === "dateDesc") {
+      // Due date — most tasks don't have one set, so those sink to the end.
       result = result.map(({ type, items }) => ({
         type,
         items: [...items].sort((a, b) => {
@@ -1684,9 +1693,10 @@ export default function Tracker({ session, onSignOut }) {
                 <option value="Done">Done</option>
               </select>
               <select className={select} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                <option value="recent">Recently added</option>
-                <option value="dateAsc">Date — soonest first</option>
-                <option value="dateDesc">Date — latest first</option>
+                <option value="newestAdded">Newest added</option>
+                <option value="oldestAdded">Oldest added</option>
+                <option value="dateAsc">Due date — soonest first</option>
+                <option value="dateDesc">Due date — latest first</option>
               </select>
               {propFilter !== "all" ? (
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-800 pl-2.5 pr-1.5 py-1.5 text-sm font-medium text-slate-200">
