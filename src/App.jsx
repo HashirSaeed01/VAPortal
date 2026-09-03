@@ -40,7 +40,22 @@ export default function App() {
       setReady(true);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
+
+    // The background refresh timer can miss its window on a tab that's
+    // sat inactive for hours (laptop asleep, phone browser backgrounded),
+    // leaving a JWT that's already expired by the time you come back.
+    // Forcing a refresh check the moment the tab is visible again catches
+    // that before any request has a chance to fail with "JWT expired".
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") supabase.auth.startAutoRefresh();
+      else supabase.auth.stopAutoRefresh();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      sub.subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   if (!isConfigured) return <ConfigNeeded />;
