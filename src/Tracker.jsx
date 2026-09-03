@@ -458,7 +458,7 @@ function buildReportText(tasks, f, labels) {
       const parts = [`${t.title}${unitTag}`];
       if (meta.length) parts.push(meta.join(", "));
       if (t.notes) parts.push(t.notes.replace(/\n/g, " "));
-      lines.push(parts.join(" · "));
+      lines.push(`    ${parts.join(" · ")}`);
     }
     lines.push("");
   }
