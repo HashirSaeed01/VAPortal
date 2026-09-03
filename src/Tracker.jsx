@@ -22,6 +22,16 @@ function propertyLabel(key, labels) {
   return (labels && labels[key]) || key;
 }
 
+// Best-effort display name from a login email, so the app knows who's
+// using it without asking — "hashir.saeed@x.com" -> "Hashir Saeed".
+function nameFromEmail(email) {
+  if (!email) return "";
+  const local = email.split("@")[0];
+  const words = local.replace(/[._-]+/g, " ").replace(/\d+/g, " ").trim();
+  if (!words) return local;
+  return words.split(" ").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
 /* ---- DB row <-> app object mapping (DB uses snake_case start_date) ---- */
 const toRow = (t) => ({
   title: t.title, property: t.property, type: t.type,
@@ -848,8 +858,8 @@ function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn }) {
               "relative z-10 mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 " +
               (s.state === "checked" ? "border-emerald-400 bg-emerald-400"
                 : s.state === "current" ? "border-amber-400 bg-amber-400/40 animate-pulse"
-                : s.state === "missed" ? "border-red-500 bg-transparent"
-                : "border-slate-600 bg-transparent")
+                : s.state === "missed" ? "border-slate-500 bg-transparent"
+                : "border-slate-700 bg-transparent")
             } />
             <div className="min-w-0">
               <div className="text-[11px] font-semibold text-slate-300">{formatHour(s.h)}</div>
@@ -1057,15 +1067,10 @@ export default function Tracker({ session, onSignOut }) {
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
 
-  // Who's using this device right now — drives the recheck timeline and
-  // gets stamped on tasks you create. Remembered per-browser, not per-login.
-  const [currentUser, setCurrentUserState] = useState(() => {
-    try { return localStorage.getItem("bh_current_user") || ""; } catch { return ""; }
-  });
-  const setCurrentUser = (v) => {
-    setCurrentUserState(v);
-    try { localStorage.setItem("bh_current_user", v); } catch { /* private browsing, etc. */ }
-  };
+  // Who's using this — pulled straight from the logged-in session rather
+  // than asking, since signing in already answers that. Drives the recheck
+  // timeline and gets stamped on tasks you create.
+  const currentUser = useMemo(() => nameFromEmail(session?.user?.email), [session]);
   const [checkins, setCheckins] = useState([]);
   const [checkingIn, setCheckingIn] = useState(false);
 
@@ -1542,14 +1547,9 @@ export default function Tracker({ session, onSignOut }) {
                 </button>
               </>
             ) : null}
-            <div className="relative">
-              <UserCircle2 size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-              <select value={currentUser} onChange={(e) => setCurrentUser(e.target.value)} title="Who's using this device"
-                className="rounded-md border border-white/40 bg-slate-900 py-2 pl-8 pr-7 text-sm font-medium text-slate-200 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300">
-                <option value="">Who are you?</option>
-                {STAFF.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-2 text-sm font-medium text-slate-300" title={session?.user?.email || ""}>
+              <UserCircle2 size={15} className="text-slate-500" /> {currentUser || "Signed in"}
+            </span>
             <button type="button" onClick={onSignOut} title="Sign out" className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">
               <LogOut size={15} />
             </button>
