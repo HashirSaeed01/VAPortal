@@ -106,9 +106,17 @@ export function stateOf(status) {
   return "In Progress";
 }
 
+// Accepts the ISO format native <input type="date"> emits (YYYY-MM-DD),
+// and falls back to the legacy M/D/YYYY strings already saved on older rows.
 export function parseDate(s) {
   if (!s) return null;
-  const parts = String(s).split("/");
+  const str = String(s);
+  const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const dt = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const parts = str.split("/");
   if (parts.length !== 3) return null;
   const [m, d, y] = parts.map(Number);
   const dt = new Date(y, m - 1, d);

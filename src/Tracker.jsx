@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Plus, Trash2, Pencil, X, Download, Search, AlertTriangle, CheckCircle2,
-  Clock, Loader2, UserCheck, ChevronDown, ChevronRight,
+  Clock, Loader2, UserCheck, ChevronDown, ChevronRight, ChevronLeft,
   RefreshCw, LogOut, Flag, FileText, Building2, Phone, Mail, Users, Bell, PhoneCall,
   Copy, Check, Settings, DoorOpen, ClipboardList, ArrowLeft, PlayCircle, UserCircle2,
 } from "lucide-react";
@@ -30,6 +30,21 @@ function nameFromEmail(email) {
   const words = local.replace(/[._-]+/g, " ").replace(/\d+/g, " ").trim();
   if (!words) return local;
   return words.split(" ").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+// Local device date, not UTC — matches what <input type="date"> expects/emits.
+function toISO(date) {
+  if (!date) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function todayISO() {
+  return toISO(new Date());
+}
+// Renders in whichever date format the viewer's own browser/OS uses —
+// no more one hardcoded US layout for everybody.
+function formatDateDisplay(s) {
+  const d = parseDate(s);
+  return d ? d.toLocaleDateString() : s;
 }
 
 /* ---- DB row <-> app object mapping (DB uses snake_case start_date) ---- */
@@ -117,7 +132,9 @@ function TaskModal({ task, prefill, contacts, properties, units, propertyLabels,
   }, [properties, task, prefill]);
 
   const [draft, setDraft] = useState(() => {
-    const base = task || { title: "", property: propertyOptions[0] || "", type: TYPES[0], startDate: "", status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, unit: "", ...prefill };
+    const base = task
+      ? { ...task, startDate: toISO(parseDate(task.startDate)) }
+      : { title: "", property: propertyOptions[0] || "", type: TYPES[0], startDate: todayISO(), status: "To Start", notes: "", reportedBy: "", assignedTo: "", priority: false, unit: "", ...prefill };
     if (!task && !base.assignedTo) {
       const rec = recommendContractor(contacts, base.property, base.type);
       if (rec) return { ...base, assignedTo: rec };
@@ -202,7 +219,7 @@ function TaskModal({ task, prefill, contacts, properties, units, propertyLabels,
             </div>
             <div>
               <label className={lbl}>Start date</label>
-              <input className={field} value={draft.startDate} onChange={(e) => set("startDate", e.target.value)} placeholder="M/D/YYYY" />
+              <input type="date" className={field} value={draft.startDate} onChange={(e) => set("startDate", e.target.value)} />
             </div>
           </div>
           <label className="flex items-center gap-2 text-sm font-medium text-slate-200">
@@ -561,40 +578,6 @@ function ReportModal({ tasks, contacts, properties, propertyLabels, onClose }) {
   );
 }
 
-function DeleteAllModal({ count, onConfirm, onClose, deleting }) {
-  const [text, setText] = useState("");
-  const ready = text.trim().toUpperCase() === "DELETE";
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.8)" }} onClick={onClose}>
-      <div className="mt-10 w-full max-w-sm rounded-2xl bg-slate-900 border border-red-500/40 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-red-400"><Trash2 size={16} /> Delete all tasks</h3>
-          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
-        </div>
-        <div className="space-y-3 px-5 py-4 text-sm">
-          <p className="text-slate-200">
-            This permanently deletes <span className="font-bold text-white">all {count} tasks</span> for every team member. Contacts, checklists,
-            and key dates are not affected. <span className="font-semibold text-red-400">This cannot be undone.</span>
-          </p>
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-300">Type DELETE to confirm</label>
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="DELETE"
-              className="w-full rounded-md border border-red-500/40 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-400" />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
-          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
-          <button type="button" disabled={!ready || deleting} onClick={onConfirm}
-            className="flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-40">
-            {deleting ? <Loader2 className="animate-spin" size={15} /> : <Trash2 size={15} />}
-            Delete all {count} tasks
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* --------------------------- Properties manager -------------------------- */
 
 function PropertyRow({ p, usedKeys, onSave, onDelete }) {
@@ -623,6 +606,36 @@ function PropertyRow({ p, usedKeys, onSave, onDelete }) {
           <Trash2 size={14} />
         </button>
       )}
+    </div>
+  );
+}
+
+function DisplayNameModal({ currentName, onSave, onClose, saving }) {
+  const [name, setName] = useState(currentName || "");
+  const valid = name.trim().length > 0;
+  const field = "w-full rounded-md border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto" style={{ backgroundColor: "rgba(0,0,0,0.7)" }} onClick={onClose}>
+      <div className="mt-10 w-full max-w-xs rounded-2xl bg-slate-900 border border-slate-700 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-3">
+          <h3 className="text-sm font-semibold text-white">Your display name</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="px-5 py-4">
+          <label className="mb-1 block text-xs font-semibold text-slate-300">Shown to the whole team</label>
+          <input className={field} value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && valid) onSave(name); }}
+            placeholder="e.g. Mariam" autoFocus />
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-700 px-5 py-3">
+          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">Cancel</button>
+          <button type="button" disabled={!valid || saving} onClick={() => onSave(name)}
+            className="flex items-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+            {saving ? <Loader2 className="animate-spin" size={15} /> : null}
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -855,6 +868,7 @@ function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, last
     }
     return list;
   }, [checkins, now]);
+  const currentWindowEndHour = checkpoints.length ? (checkpoints[checkpoints.length - 1].h + 2) % 24 : null;
 
   return (
     <aside className="hidden xl:flex sticky top-24 w-48 shrink-0 flex-col self-start rounded-xl border border-slate-700 bg-slate-900 p-4">
@@ -903,6 +917,9 @@ function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, last
         {checkingIn ? <Loader2 className="animate-spin" size={13} /> : <CheckCircle2 size={13} />}
         {!cycleSkipped && lastCheckin?.person === currentUser ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
       </button>
+      {currentWindowEndHour !== null ? (
+        <div className="mt-1.5 text-center text-[10px] text-slate-600">Late is fine — counts until {formatHour(currentWindowEndHour)}</div>
+      ) : null}
     </aside>
   );
 }
@@ -987,7 +1004,7 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onQuickInProgress, onTogg
             <span>Category: <span className="text-slate-200">{t.type}</span></span>
             <span>Reported by: <span className="text-slate-200">{t.reportedBy || "—"}</span></span>
             {t.createdBy ? <span>Added by: <span className="text-slate-200">{t.createdBy}</span></span> : null}
-            {t.startDate ? <span>Date: <span className="text-slate-200">{t.startDate}</span></span> : null}
+            {t.startDate ? <span>Date: <span className="text-slate-200">{formatDateDisplay(t.startDate)}</span></span> : null}
           </div>
           {t.notes ? <p className="whitespace-pre-wrap rounded-md bg-slate-900 p-2.5 leading-relaxed text-slate-300">{t.notes}</p> : null}
 
@@ -1090,15 +1107,22 @@ export default function Tracker({ session, onSignOut }) {
   const [editingKeyDate, setEditingKeyDate] = useState(null);
   const [savingKeyDate, setSavingKeyDate] = useState(false);
   const [showAllKeyDates, setShowAllKeyDates] = useState(false);
+  const keyDatesScrollRef = useRef(null);
 
   const [reportModalOpen, setReportModalOpen] = useState(false);
-  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
-  const [deletingAll, setDeletingAll] = useState(false);
 
   // Who's using this — pulled straight from the logged-in session rather
-  // than asking, since signing in already answers that. Drives the recheck
-  // timeline and gets stamped on tasks you create.
-  const currentUser = useMemo(() => nameFromEmail(session?.user?.email), [session]);
+  // than asking, since signing in already answers that. A shared login
+  // (e.g. info@bayhomes.co) can still set a real display name via the
+  // "people" table, so it's not stuck showing the raw email forever.
+  const [people, setPeople] = useState([]);
+  const [nameModalOpen, setNameModalOpen] = useState(false);
+  const [savingName, setSavingName] = useState(false);
+  const currentUser = useMemo(() => {
+    const email = session?.user?.email;
+    const custom = people.find((p) => p.email === email)?.display_name;
+    return custom || nameFromEmail(email);
+  }, [session, people]);
   const [checkins, setCheckins] = useState([]);
   const [checkingIn, setCheckingIn] = useState(false);
   const [checkinError, setCheckinError] = useState(null);
@@ -1167,15 +1191,21 @@ export default function Tracker({ session, onSignOut }) {
     setCheckins(data || []);
   }, []);
 
+  const fetchPeople = useCallback(async () => {
+    const { data, error } = await supabase.from("people").select("*");
+    if (error) return; // people table may not exist yet until the migration runs
+    setPeople(data || []);
+  }, []);
+
   // Initial load.
   useEffect(() => {
     (async () => {
       setLoading(true);
       await fetchTasks();
-      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins()]);
+      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins(), fetchPeople()]);
       setLoading(false);
     })();
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins, fetchPeople]);
 
   // Live updates from teammates + refetch when returning to the tab.
   useEffect(() => {
@@ -1189,15 +1219,16 @@ export default function Tracker({ session, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "properties" }, () => fetchProperties())
       .on("postgres_changes", { event: "*", schema: "public", table: "units" }, () => fetchUnits())
       .on("postgres_changes", { event: "*", schema: "public", table: "checkins" }, () => fetchCheckins())
+      .on("postgres_changes", { event: "*", schema: "public", table: "people" }, () => fetchPeople())
       .subscribe();
-    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); fetchProperties(); fetchUnits(); fetchCheckins(); };
+    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); fetchProperties(); fetchUnits(); fetchCheckins(); fetchPeople(); };
     window.addEventListener("focus", onFocus);
     return () => { supabase.removeChannel(channel); window.removeEventListener("focus", onFocus); };
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins, fetchPeople]);
 
   const refresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins()]);
+    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins(), fetchPeople()]);
     setRefreshing(false);
   };
 
@@ -1217,6 +1248,17 @@ export default function Tracker({ session, onSignOut }) {
     if (error) setError(error.message + " (has the checkins table migration been run yet?)");
     await fetchCheckins();
     setCheckingIn(false);
+  };
+
+  const saveDisplayName = async (name) => {
+    const email = session?.user?.email;
+    if (!email || !name.trim()) return;
+    setSavingName(true);
+    const { error } = await supabase.from("people").upsert({ email, display_name: name.trim() });
+    if (error) setError(error.message + " (has the people table migration been run yet?)");
+    await fetchPeople();
+    setSavingName(false);
+    setNameModalOpen(false);
   };
 
   const openAdd = (prefill) => { setEditing(null); setAddPrefill(prefill || null); setModalOpen(true); };
@@ -1245,15 +1287,6 @@ export default function Tracker({ session, onSignOut }) {
     const { error } = await supabase.from("tasks").delete().eq("id", id);
     if (error) { setError(error.message); return; }
     await fetchTasks();
-  };
-
-  const removeAllTasks = async () => {
-    setDeletingAll(true);
-    const { error } = await supabase.from("tasks").delete().not("id", "is", null);
-    if (error) setError(error.message);
-    await fetchTasks();
-    setDeletingAll(false);
-    setDeleteAllModalOpen(false);
   };
 
   const setStatus = async (id, status) => {
@@ -1596,9 +1629,11 @@ export default function Tracker({ session, onSignOut }) {
                 </button>
               </>
             ) : null}
-            <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-2 text-sm font-medium text-slate-300" title={session?.user?.email || ""}>
+            <button type="button" onClick={() => setNameModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
+              title={`${session?.user?.email || ""} — click to change your display name`}>
               <UserCircle2 size={15} className="text-slate-500" /> {currentUser || "Signed in"}
-            </span>
+            </button>
             <button type="button" onClick={onSignOut} title="Sign out" className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">
               <LogOut size={15} />
             </button>
@@ -1721,32 +1756,38 @@ export default function Tracker({ session, onSignOut }) {
                       className="inline-flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white">
                       <Plus size={13} /> Add key date
                     </button>
+                    <div className="flex items-center gap-1 border-l border-slate-700 pl-3">
+                      <button type="button" onClick={() => keyDatesScrollRef.current?.scrollBy({ left: -200, behavior: "smooth" })}
+                        className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white" title="Scroll left"><ChevronLeft size={15} /></button>
+                      <button type="button" onClick={() => keyDatesScrollRef.current?.scrollBy({ left: 200, behavior: "smooth" })}
+                        className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white" title="Scroll right"><ChevronRight size={15} /></button>
+                    </div>
                   </div>
                 </div>
                 {!showAllKeyDates && upcomingKeyDates.length === 0 ? (
                   <p className="text-xs font-medium text-slate-500">Nothing due in the next {KEY_DATE_ALERT_DAYS} days.</p>
                 ) : null}
-                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                <div ref={keyDatesScrollRef} className="flex items-start gap-2 overflow-x-auto scroll-smooth pb-1 -mx-1 px-1">
                   {(showAllKeyDates ? sortedKeyDates : upcomingKeyDates).map((k) => {
                     const dLeft = daysUntil(k.month, k.day);
                     const soon = dLeft <= 7;
                     return (
-                      <div key={k.id} className="flex w-64 shrink-0 items-start justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-white">{k.title}</div>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium text-slate-500">
-                            <span>{MONTHS[k.month - 1]} {k.day}</span>
-                            <span className={soon ? "text-red-400" : dLeft <= KEY_DATE_ALERT_DAYS ? "text-amber-400" : ""}>
-                              {dLeft === 0 ? "today" : dLeft === 1 ? "tomorrow" : `in ${dLeft}d`}
-                            </span>
-                            {k.property ? <span>· {propertyLabel(k.property, propertyLabels)}</span> : null}
+                      <div key={k.id} className="flex w-48 shrink-0 flex-col gap-1 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
+                        <div className="flex items-start justify-between gap-1">
+                          <div className="text-sm font-medium leading-tight text-white">{k.title}</div>
+                          <div className="flex shrink-0 items-center gap-0.5">
+                            <button type="button" onClick={() => { setEditingKeyDate(k); setKeyDateModalOpen(true); }} className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-white" title="Edit"><Pencil size={12} /></button>
+                            <button type="button" onClick={() => removeKeyDate(k.id)} className="rounded p-1 text-slate-500 hover:bg-red-500/15 hover:text-red-400" title="Delete"><Trash2 size={12} /></button>
                           </div>
-                          {k.notes ? <p className="mt-1 text-xs text-slate-400">{k.notes}</p> : null}
                         </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button type="button" onClick={() => { setEditingKeyDate(k); setKeyDateModalOpen(true); }} className="rounded p-1.5 text-slate-500 hover:bg-slate-800 hover:text-white" title="Edit"><Pencil size={13} /></button>
-                          <button type="button" onClick={() => removeKeyDate(k.id)} className="rounded p-1.5 text-slate-500 hover:bg-red-500/15 hover:text-red-400" title="Delete"><Trash2 size={13} /></button>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-medium text-slate-500">
+                          <span>{MONTHS[k.month - 1]} {k.day}</span>
+                          <span className={soon ? "text-red-400" : dLeft <= KEY_DATE_ALERT_DAYS ? "text-amber-400" : ""}>
+                            {dLeft === 0 ? "today" : dLeft === 1 ? "tomorrow" : `in ${dLeft}d`}
+                          </span>
                         </div>
+                        {k.property ? <div className="text-xs text-slate-500">{propertyLabel(k.property, propertyLabels)}</div> : null}
+                        {k.notes ? <p className="text-xs text-slate-400">{k.notes}</p> : null}
                       </div>
                     );
                   })}
@@ -1936,12 +1977,6 @@ export default function Tracker({ session, onSignOut }) {
 
             <footer className="pt-2 pb-8 text-center text-xs font-medium text-slate-500">
               Live shared database · changes sync to everyone on the team in real time
-              <div className="mt-3">
-                <button type="button" onClick={() => setDeleteAllModalOpen(true)}
-                  className="text-slate-700 hover:text-red-400">
-                  Delete all tasks…
-                </button>
-              </div>
             </footer>
           </>
         )}
@@ -1980,9 +2015,9 @@ export default function Tracker({ session, onSignOut }) {
           onClose={() => setPropertiesModalOpen(false)} />
       ) : null}
 
-      {deleteAllModalOpen ? (
-        <DeleteAllModal count={tasks.length} deleting={deletingAll} onConfirm={removeAllTasks}
-          onClose={() => setDeleteAllModalOpen(false)} />
+      {nameModalOpen ? (
+        <DisplayNameModal currentName={currentUser} saving={savingName} onSave={saveDisplayName}
+          onClose={() => setNameModalOpen(false)} />
       ) : null}
     </div>
   );
