@@ -392,6 +392,12 @@ function presetRange(key) {
   return { from: "", to: "" };
 }
 
+// Some rows have a literal "none"/"n/a" typed into a field instead of
+// leaving it blank — treat that the same as empty rather than printing it.
+function hasValue(v) {
+  return !!v && !["none", "n/a", "na", "-", "—"].includes(v.trim().toLowerCase());
+}
+
 // Builds a plain-text rundown grouped by property, honoring every active
 // filter — the thing you'd paste into a status update or message.
 function buildReportText(tasks, f, labels) {
@@ -447,13 +453,13 @@ function buildReportText(tasks, f, labels) {
       const done = stateOf(t.status) === "Done";
       const unitTag = t.unit ? `, ${t.unit}` : "";
       const meta = [];
-      if (t.assignedTo) meta.push(`Assigned to ${t.assignedTo}`);
-      if (t.reportedBy) meta.push(`Reported by ${t.reportedBy}`);
+      if (hasValue(t.assignedTo)) meta.push(`Assigned to ${t.assignedTo}`);
+      if (hasValue(t.reportedBy)) meta.push(`Reported by ${t.reportedBy}`);
       if (done) meta.push("Done");
       else if (t.priority) meta.push("Priority");
       const parts = [`*${t.title}${unitTag}*`];
       if (meta.length) parts.push(meta.join(", "));
-      if (t.notes) parts.push(t.notes.replace(/\n/g, " "));
+      if (hasValue(t.notes)) parts.push(t.notes.replace(/\n/g, " "));
       lines.push(`${i + 1}) ${parts.join(" — ")}`);
     });
     lines.push("");
