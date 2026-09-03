@@ -26,6 +26,7 @@ alter table public.tasks add column if not exists reported_by text default '';
 alter table public.tasks add column if not exists assigned_to text default '';
 alter table public.tasks add column if not exists priority boolean not null default false;
 alter table public.tasks add column if not exists unit text default '';
+alter table public.tasks add column if not exists created_by text default '';
 
 -- 2) Keep updated_at current on every update
 create or replace function public.set_updated_at()
@@ -315,5 +316,39 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'units'
   ) then
     alter publication supabase_realtime add table public.units;
+  end if;
+end $$;
+
+-- ============================================================
+-- 11) Checkins — a log of "I just went through the to-do list"
+--     check-ins, one row per person per check. Powers the recheck
+--     timeline rail on the task view.
+-- ============================================================
+create table if not exists public.checkins (
+  id          uuid primary key default gen_random_uuid(),
+  person      text not null,
+  checked_at  timestamptz not null default now(),
+  created_at  timestamptz not null default now()
+);
+
+alter table public.checkins enable row level security;
+
+drop policy if exists "authenticated can read"   on public.checkins;
+drop policy if exists "authenticated can insert" on public.checkins;
+drop policy if exists "authenticated can update" on public.checkins;
+drop policy if exists "authenticated can delete" on public.checkins;
+
+create policy "authenticated can read"   on public.checkins for select to authenticated using (true);
+create policy "authenticated can insert" on public.checkins for insert to authenticated with check (true);
+create policy "authenticated can update" on public.checkins for update to authenticated using (true) with check (true);
+create policy "authenticated can delete" on public.checkins for delete to authenticated using (true);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'checkins'
+  ) then
+    alter publication supabase_realtime add table public.checkins;
   end if;
 end $$;

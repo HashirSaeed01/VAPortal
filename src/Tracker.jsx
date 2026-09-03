@@ -3,7 +3,7 @@ import {
   Plus, Trash2, Pencil, X, Download, Search, AlertTriangle, CheckCircle2,
   Clock, Loader2, UserCheck, ChevronDown, ChevronRight,
   RefreshCw, LogOut, Flag, FileText, Building2, Phone, Mail, Users, Bell, PhoneCall,
-  Copy, Check, Settings, DoorOpen, ClipboardList, ArrowLeft,
+  Copy, Check, Settings, DoorOpen, ClipboardList, ArrowLeft, PlayCircle, UserCircle2,
 } from "lucide-react";
 import { supabase } from "./lib/supabase.js";
 import {
@@ -27,13 +27,13 @@ const toRow = (t) => ({
   title: t.title, property: t.property, type: t.type,
   start_date: t.startDate || "", status: t.status, notes: t.notes || "",
   reported_by: t.reportedBy || "", assigned_to: t.assignedTo || "", priority: !!t.priority,
-  unit: t.unit || "",
+  unit: t.unit || "", created_by: t.createdBy || "",
 });
 const fromRow = (r) => ({
   id: r.id, title: r.title, property: r.property, type: r.type,
   startDate: r.start_date || "", status: r.status, notes: r.notes || "",
   reportedBy: r.reported_by || "", assignedTo: r.assigned_to || "", priority: !!r.priority,
-  unit: r.unit || "", createdAt: r.created_at || "",
+  unit: r.unit || "", createdAt: r.created_at || "", createdBy: r.created_by || "",
 });
 
 function csvEscape(v) {
@@ -800,14 +800,84 @@ function UnitsView({ properties, propertyLabels, units, tasks, onSaveUnit, onDel
   );
 }
 
+/* ---------------------------- Recheck timeline --------------------------- */
+
+// Working-hours slots, 2 hours apart. Each slot fills in once someone
+// checks in during its window; the active slot pulses until then, and a
+// slot that's fully elapsed with no check-in reads as missed.
+const RECHECK_HOURS = [8, 10, 12, 14, 16, 18, 20];
+function formatHour(h) {
+  const period = h < 12 ? "AM" : "PM";
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}${period}`;
+}
+
+function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn }) {
+  const now = new Date();
+  const slots = useMemo(() => RECHECK_HOURS.map((h) => {
+    const start = new Date(); start.setHours(h, 0, 0, 0);
+    const end = new Date(start); end.setHours(end.getHours() + 2);
+    const inSlot = checkins.filter((c) => { const t = new Date(c.checked_at); return t >= start && t < end; });
+    let state;
+    if (now < start) state = "upcoming";
+    else if (inSlot.length) state = "checked";
+    else if (now < end) state = "current";
+    else state = "missed";
+    return { h, inSlot, state };
+  }), [checkins, now]);
+
+  const lastCheckin = checkins.length
+    ? checkins.reduce((a, b) => (new Date(a.checked_at) > new Date(b.checked_at) ? a : b))
+    : null;
+  const minsSince = lastCheckin ? Math.round((Date.now() - new Date(lastCheckin.checked_at).getTime()) / 60000) : null;
+  const overdue = minsSince === null || minsSince >= 120;
+
+  return (
+    <aside className="hidden xl:flex fixed right-4 top-24 bottom-6 w-44 flex-col rounded-xl border border-slate-700 bg-slate-900 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-300"><Clock size={13} /> Recheck timeline</div>
+      <div className={"mb-3 rounded-md px-2 py-1.5 text-xs font-semibold " + (overdue ? "bg-red-500/15 text-red-400" : "bg-emerald-500/15 text-emerald-400")}>
+        {lastCheckin
+          ? `Last check ${minsSince < 60 ? `${minsSince}m` : `${Math.round(minsSince / 60)}h`} ago — ${lastCheckin.person}`
+          : "No checks yet today"}
+      </div>
+      <div className="relative min-h-0 flex-1 overflow-y-auto pl-1">
+        <div className="absolute left-[9px] top-1 bottom-1 w-px bg-slate-700" />
+        {slots.map((s) => (
+          <div key={s.h} className="relative flex items-start gap-2 py-1.5">
+            <span className={
+              "relative z-10 mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 " +
+              (s.state === "checked" ? "border-emerald-400 bg-emerald-400"
+                : s.state === "current" ? "border-amber-400 bg-amber-400/40 animate-pulse"
+                : s.state === "missed" ? "border-red-500 bg-transparent"
+                : "border-slate-600 bg-transparent")
+            } />
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold text-slate-300">{formatHour(s.h)}</div>
+              {s.inSlot.length ? (
+                <div className="truncate text-[10px] text-emerald-300">{s.inSlot.map((c) => c.person).join(", ")}</div>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn}
+        className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+        {checkingIn ? <Loader2 className="animate-spin" size={13} /> : <CheckCircle2 size={13} />}
+        {currentUser ? `Check in as ${currentUser}` : "Set your name to check in"}
+      </button>
+    </aside>
+  );
+}
+
 /* ------------------------------- Task row ------------------------------- */
 
-function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetStatus, onEdit, onDelete, showProperty, propertyLabels, calls, onAddCall, onToggleCall, onDeleteCall }) {
+function TaskRow({ t, open, onToggleOpen, onQuickDone, onQuickInProgress, onTogglePriority, onSetStatus, onEdit, onDelete, showProperty, propertyLabels, calls, onAddCall, onToggleCall, onDeleteCall }) {
   const st = stateOf(t.status);
   const meta = STATE_META[st];
   const age = daysSince(t.startDate);
   const isStale = st !== "Done" && age !== null && age >= STALE_DAYS;
   const done = st === "Done";
+  const inProgress = t.status === "On Going";
   const [callInput, setCallInput] = useState("");
   const [callFieldOpen, setCallFieldOpen] = useState(false);
   const submitCall = () => { const text = callInput.trim(); if (text) { onAddCall(text); setCallInput(""); } };
@@ -853,6 +923,18 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
           }>
           <CheckCircle2 size={14} fill={done ? "currentColor" : "none"} /> {done ? "Done" : "Complete"}
         </button>
+        {!done ? (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onQuickInProgress(t); }}
+            title={inProgress ? "Back to To Start" : "Mark in progress"}
+            className={
+              "shrink-0 inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-semibold shadow-sm transition-colors " +
+              (inProgress
+                ? "border-blue-500/40 bg-blue-500/15 text-blue-300 hover:bg-blue-500/25"
+                : "border-slate-500 bg-slate-800 text-slate-100 hover:border-blue-400 hover:bg-blue-500/20 hover:text-blue-300")
+            }>
+            <PlayCircle size={14} fill={inProgress ? "currentColor" : "none"} /> {inProgress ? "In Progress" : "Start"}
+          </button>
+        ) : null}
         <button type="button" onClick={(e) => { e.stopPropagation(); onTogglePriority(t.id, !t.priority); }}
           className={"shrink-0 rounded p-1 " + (t.priority ? "text-red-400" : "text-slate-600 hover:text-slate-400")}
           title={t.priority ? "Unmark priority" : "Mark priority"}>
@@ -866,6 +948,7 @@ function TaskRow({ t, open, onToggleOpen, onQuickDone, onTogglePriority, onSetSt
           <div className="flex flex-wrap gap-x-4 gap-y-1.5 font-medium text-slate-400">
             <span>Category: <span className="text-slate-200">{t.type}</span></span>
             <span>Reported by: <span className="text-slate-200">{t.reportedBy || "—"}</span></span>
+            {t.createdBy ? <span>Added by: <span className="text-slate-200">{t.createdBy}</span></span> : null}
             {t.startDate ? <span>Date: <span className="text-slate-200">{t.startDate}</span></span> : null}
           </div>
           {t.notes ? <p className="whitespace-pre-wrap rounded-md bg-slate-900 p-2.5 leading-relaxed text-slate-300">{t.notes}</p> : null}
@@ -974,6 +1057,18 @@ export default function Tracker({ session, onSignOut }) {
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
 
+  // Who's using this device right now — drives the recheck timeline and
+  // gets stamped on tasks you create. Remembered per-browser, not per-login.
+  const [currentUser, setCurrentUserState] = useState(() => {
+    try { return localStorage.getItem("bh_current_user") || ""; } catch { return ""; }
+  });
+  const setCurrentUser = (v) => {
+    setCurrentUserState(v);
+    try { localStorage.setItem("bh_current_user", v); } catch { /* private browsing, etc. */ }
+  };
+  const [checkins, setCheckins] = useState([]);
+  const [checkingIn, setCheckingIn] = useState(false);
+
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
 
@@ -1020,15 +1115,22 @@ export default function Tracker({ session, onSignOut }) {
     setUnits(data || []);
   }, []);
 
+  const fetchCheckins = useCallback(async () => {
+    const since = new Date(); since.setHours(0, 0, 0, 0);
+    const { data, error } = await supabase.from("checkins").select("*").gte("checked_at", since.toISOString()).order("checked_at", { ascending: false });
+    if (error) return; // checkins table may not exist yet until the migration runs
+    setCheckins(data || []);
+  }, []);
+
   // Initial load.
   useEffect(() => {
     (async () => {
       setLoading(true);
       await fetchTasks();
-      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits()]);
+      await Promise.all([fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins()]);
       setLoading(false);
     })();
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins]);
 
   // Live updates from teammates + refetch when returning to the tab.
   useEffect(() => {
@@ -1041,16 +1143,26 @@ export default function Tracker({ session, onSignOut }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "key_dates" }, () => fetchKeyDates())
       .on("postgres_changes", { event: "*", schema: "public", table: "properties" }, () => fetchProperties())
       .on("postgres_changes", { event: "*", schema: "public", table: "units" }, () => fetchUnits())
+      .on("postgres_changes", { event: "*", schema: "public", table: "checkins" }, () => fetchCheckins())
       .subscribe();
-    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); fetchProperties(); fetchUnits(); };
+    const onFocus = () => { fetchTasks(); fetchContacts(); fetchChecklist(); fetchTaskCalls(); fetchKeyDates(); fetchProperties(); fetchUnits(); fetchCheckins(); };
     window.addEventListener("focus", onFocus);
     return () => { supabase.removeChannel(channel); window.removeEventListener("focus", onFocus); };
-  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits]);
+  }, [fetchTasks, fetchContacts, fetchChecklist, fetchTaskCalls, fetchKeyDates, fetchProperties, fetchUnits, fetchCheckins]);
 
   const refresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits()]);
+    await Promise.all([fetchTasks(), fetchContacts(), fetchChecklist(), fetchTaskCalls(), fetchKeyDates(), fetchProperties(), fetchUnits(), fetchCheckins()]);
     setRefreshing(false);
+  };
+
+  const checkIn = async () => {
+    if (!currentUser) return;
+    setCheckingIn(true);
+    const { error } = await supabase.from("checkins").insert({ person: currentUser });
+    if (error) setError(error.message + " (has the checkins table migration been run yet?)");
+    await fetchCheckins();
+    setCheckingIn(false);
   };
 
   const openAdd = (prefill) => { setEditing(null); setAddPrefill(prefill || null); setModalOpen(true); };
@@ -1063,7 +1175,7 @@ export default function Tracker({ session, onSignOut }) {
         const { error } = await supabase.from("tasks").update(toRow(task)).eq("id", task.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("tasks").insert(toRow(task));
+        const { error } = await supabase.from("tasks").insert(toRow({ ...task, createdBy: currentUser }));
         if (error) throw error;
       }
       await fetchTasks();
@@ -1097,6 +1209,7 @@ export default function Tracker({ session, onSignOut }) {
     if (error) { setError(error.message); await fetchTasks(); }
   };
   const quickDone = (t) => setStatus(t.id, isDone(t) ? "To Start" : "Complete");
+  const quickInProgress = (t) => setStatus(t.id, t.status === "On Going" ? "To Start" : "On Going");
 
   const togglePriority = async (id, priority) => {
     setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, priority } : x)));
@@ -1429,6 +1542,14 @@ export default function Tracker({ session, onSignOut }) {
                 </button>
               </>
             ) : null}
+            <div className="relative">
+              <UserCircle2 size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+              <select value={currentUser} onChange={(e) => setCurrentUser(e.target.value)} title="Who's using this device"
+                className="rounded-md border border-white/40 bg-slate-900 py-2 pl-8 pr-7 text-sm font-medium text-slate-200 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300">
+                <option value="">Who are you?</option>
+                {STAFF.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
             <button type="button" onClick={onSignOut} title="Sign out" className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 px-2.5 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800">
               <LogOut size={15} />
             </button>
@@ -1453,6 +1574,10 @@ export default function Tracker({ session, onSignOut }) {
           )
         ) : (
         <>
+
+        {!loading ? (
+          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} />
+        ) : null}
 
         {!loading && upcomingKeyDates.length > 0 ? (
           <div className="rounded-lg bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-300 ring-1 ring-inset ring-amber-500/40">
@@ -1739,7 +1864,7 @@ export default function Tracker({ session, onSignOut }) {
                           {items.map((t) => (
                             <TaskRow key={t.id} t={t} open={expanded === t.id}
                               onToggleOpen={() => setExpanded(expanded === t.id ? null : t.id)}
-                              onQuickDone={quickDone} onTogglePriority={togglePriority}
+                              onQuickDone={quickDone} onQuickInProgress={quickInProgress} onTogglePriority={togglePriority}
                               onSetStatus={setStatus} onEdit={openEdit} onDelete={removeTask}
                               showProperty={propFilter === "all"} propertyLabels={propertyLabels}
                               calls={taskCalls.filter((c) => c.task_id === t.id)}
