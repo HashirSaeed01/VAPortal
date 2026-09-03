@@ -945,6 +945,7 @@ export default function Tracker({ session, onSignOut }) {
   const [propFilter, setPropFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState(false);
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("recent"); // recent | dateAsc | dateDesc
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -1345,8 +1346,22 @@ export default function Tracker({ session, onSignOut }) {
       if (!map.has(t.type)) map.set(t.type, []);
       map.get(t.type).push(t);
     }
-    return Array.from(map, ([type, items]) => ({ type, items })).filter((g) => g.items.length > 0);
-  }, [filtered]);
+    let result = Array.from(map, ([type, items]) => ({ type, items })).filter((g) => g.items.length > 0);
+    if (sortBy !== "recent") {
+      // Tasks with no start date sort to the end regardless of direction.
+      result = result.map(({ type, items }) => ({
+        type,
+        items: [...items].sort((a, b) => {
+          const da = parseDate(a.startDate), db = parseDate(b.startDate);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return sortBy === "dateAsc" ? da - db : db - da;
+        }),
+      }));
+    }
+    return result;
+  }, [filtered, sortBy]);
 
   const toggleGroup = (type) => setCollapsedGroups((prev) => {
     const next = new Set(prev);
@@ -1667,6 +1682,11 @@ export default function Tracker({ session, onSignOut }) {
                 <option value="Waiting on Carrie">Waiting on Carrie</option>
                 <option value="stale">{`! (${STALE_DAYS}+ days)`}</option>
                 <option value="Done">Done</option>
+              </select>
+              <select className={select} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                <option value="recent">Recently added</option>
+                <option value="dateAsc">Date — soonest first</option>
+                <option value="dateDesc">Date — latest first</option>
               </select>
               {propFilter !== "all" ? (
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-800 pl-2.5 pr-1.5 py-1.5 text-sm font-medium text-slate-200">
