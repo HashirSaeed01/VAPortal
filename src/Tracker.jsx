@@ -916,9 +916,9 @@ function CheckInRail({ checkins, people, currentUser, onCheckIn, checkingIn, err
         })}
       </div>
 
-      <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] font-semibold leading-snug text-amber-300">
+      <div className="mt-4 mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] font-semibold leading-snug text-amber-300">
         <div className="mb-0.5 flex items-center gap-1 uppercase tracking-wide text-amber-400"><AlertTriangle size={11} /> Every check</div>
-        Also check email, SMS, and Hospitable — don't leave anything out.
+        Check email, SMS, and Hospitable.
       </div>
 
       {error ? <div className="mb-2 text-center text-[11px] font-medium text-red-400">{error}</div> : null}
