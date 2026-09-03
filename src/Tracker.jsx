@@ -31,6 +31,13 @@ function nameFromEmail(email) {
   if (!words) return local;
   return words.split(" ").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 }
+// Resolves live off email so a rename applies to your whole history —
+// nothing about a person's display name is ever frozen at record time.
+function nameForEmail(email, people) {
+  if (!email) return "";
+  const custom = people.find((p) => p.email === email)?.display_name;
+  return custom || nameFromEmail(email);
+}
 
 // Local device date, not UTC — matches what <input type="date"> expects/emits.
 function toISO(date) {
@@ -854,8 +861,11 @@ function useClockTick(intervalMs = 60000) {
   return now;
 }
 
-function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, lastCheckin, minsSinceLast, overdue, cycleSkipped }) {
+function CheckInRail({ checkins, people, currentUser, onCheckIn, checkingIn, error, lastCheckin, minsSinceLast, overdue, cycleSkipped, sameAsLast }) {
   const now = useClockTick();
+  // Resolve live off email — a rename applies to the whole day's history,
+  // instead of old check-ins showing a stale, now-mismatched name.
+  const nameOf = (c) => (c.person_email ? nameForEmail(c.person_email, people) : c.person);
   const checkpoints = useMemo(() => {
     const list = [];
     const nowDate = new Date(now);
@@ -895,7 +905,7 @@ function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, last
               } />
               <div className="mt-1.5 text-center text-[10px] font-medium text-slate-500">{formatHour(cp.h)}</div>
               {checked ? (
-                <div className="max-w-[7rem] truncate text-center text-xs font-semibold text-emerald-300">{cp.inWindow.map((c) => c.person).join(", ")}</div>
+                <div className="max-w-[7rem] truncate text-center text-xs font-semibold text-emerald-300">{Array.from(new Set(cp.inWindow.map(nameOf))).join(", ")}</div>
               ) : cp.current ? (
                 <div className={"text-center text-xs font-semibold " + (overdue ? "text-red-400" : "text-amber-400")}>Check now</div>
               ) : missed ? (
@@ -906,16 +916,16 @@ function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error, last
         })}
       </div>
 
-      <div className="mb-3 rounded-md border border-slate-700 bg-slate-950 px-2.5 py-2 text-[11px] leading-snug text-slate-400">
-        Also check <span className="text-slate-300">email</span>, <span className="text-slate-300">SMS</span>, and{" "}
-        <span className="text-slate-300">Hospitable</span> for new messages.
+      <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] font-semibold leading-snug text-amber-300">
+        <div className="mb-0.5 flex items-center gap-1 uppercase tracking-wide text-amber-400"><AlertTriangle size={11} /> Every check</div>
+        Also check email, SMS, and Hospitable — don't leave anything out.
       </div>
 
       {error ? <div className="mb-2 text-center text-[11px] font-medium text-red-400">{error}</div> : null}
-      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn || (!cycleSkipped && lastCheckin?.person === currentUser)}
+      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn || (sameAsLast && !cycleSkipped)}
         className="flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
         {checkingIn ? <Loader2 className="animate-spin" size={13} /> : <CheckCircle2 size={13} />}
-        {!cycleSkipped && lastCheckin?.person === currentUser ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
+        {sameAsLast && !cycleSkipped ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
       </button>
       {currentWindowEndHour !== null ? (
         <div className="mt-1.5 text-center text-[10px] text-slate-600">Late is fine — counts until {formatHour(currentWindowEndHour)}</div>
@@ -1118,11 +1128,7 @@ export default function Tracker({ session, onSignOut }) {
   const [people, setPeople] = useState([]);
   const [nameModalOpen, setNameModalOpen] = useState(false);
   const [savingName, setSavingName] = useState(false);
-  const currentUser = useMemo(() => {
-    const email = session?.user?.email;
-    const custom = people.find((p) => p.email === email)?.display_name;
-    return custom || nameFromEmail(email);
-  }, [session, people]);
+  const currentUser = useMemo(() => nameForEmail(session?.user?.email, people), [session, people]);
   const [checkins, setCheckins] = useState([]);
   const [checkingIn, setCheckingIn] = useState(false);
   const [checkinError, setCheckinError] = useState(null);
@@ -1137,6 +1143,13 @@ export default function Tracker({ session, onSignOut }) {
   );
   const checkinOverdue = minsSinceLastCheckin === null || minsSinceLastCheckin >= RECHECK_INTERVAL_MINS;
   const checkinCycleSkipped = minsSinceLastCheckin !== null && minsSinceLastCheckin >= RECHECK_INTERVAL_MINS * 2;
+  // Compares by email (falling back to name for pre-migration rows) so a
+  // display-name change never confuses who "the same person" actually is.
+  const checkinSameAsLast = useMemo(() => {
+    if (!lastCheckin) return false;
+    const email = session?.user?.email || "";
+    return (lastCheckin.person_email || lastCheckin.person) === (email || currentUser);
+  }, [lastCheckin, session, currentUser]);
 
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
@@ -1239,12 +1252,13 @@ export default function Tracker({ session, onSignOut }) {
     // checking in twice in a row doesn't prove anything got re-reviewed.
     // But if a whole extra cycle goes by with nobody else stepping in, let
     // them do it anyway — something checked beats nothing checked.
-    if (lastCheckin && lastCheckin.person === currentUser && !checkinCycleSkipped) {
+    if (checkinSameAsLast && !checkinCycleSkipped) {
       setCheckinError("You already checked in last — have someone else check in next.");
       return;
     }
+    const email = session?.user?.email || "";
     setCheckingIn(true);
-    const { error } = await supabase.from("checkins").insert({ person: currentUser });
+    const { error } = await supabase.from("checkins").insert({ person: currentUser, person_email: email });
     if (error) setError(error.message + " (has the checkins table migration been run yet?)");
     await fetchCheckins();
     setCheckingIn(false);
@@ -1772,9 +1786,9 @@ export default function Tracker({ session, onSignOut }) {
                     const dLeft = daysUntil(k.month, k.day);
                     const soon = dLeft <= 7;
                     return (
-                      <div key={k.id} className="flex w-48 shrink-0 flex-col gap-1 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
+                      <div key={k.id} className="flex h-28 w-48 shrink-0 flex-col gap-1 overflow-hidden rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-2">
                         <div className="flex items-start justify-between gap-1">
-                          <div className="text-sm font-medium leading-tight text-white">{k.title}</div>
+                          <div className="line-clamp-2 text-sm font-medium leading-tight text-white">{k.title}</div>
                           <div className="flex shrink-0 items-center gap-0.5">
                             <button type="button" onClick={() => { setEditingKeyDate(k); setKeyDateModalOpen(true); }} className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-white" title="Edit"><Pencil size={12} /></button>
                             <button type="button" onClick={() => removeKeyDate(k.id)} className="rounded p-1 text-slate-500 hover:bg-red-500/15 hover:text-red-400" title="Delete"><Trash2 size={12} /></button>
@@ -1786,8 +1800,8 @@ export default function Tracker({ session, onSignOut }) {
                             {dLeft === 0 ? "today" : dLeft === 1 ? "tomorrow" : `in ${dLeft}d`}
                           </span>
                         </div>
-                        {k.property ? <div className="text-xs text-slate-500">{propertyLabel(k.property, propertyLabels)}</div> : null}
-                        {k.notes ? <p className="text-xs text-slate-400">{k.notes}</p> : null}
+                        {k.property ? <div className="truncate text-xs text-slate-500">{propertyLabel(k.property, propertyLabels)}</div> : null}
+                        {k.notes ? <p className="truncate text-xs text-slate-400">{k.notes}</p> : null}
                       </div>
                     );
                   })}
@@ -1982,8 +1996,8 @@ export default function Tracker({ session, onSignOut }) {
         )}
         </div>
         {!loading ? (
-          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} error={checkinError}
-            lastCheckin={lastCheckin} minsSinceLast={minsSinceLastCheckin} overdue={checkinOverdue} cycleSkipped={checkinCycleSkipped} />
+          <CheckInRail checkins={checkins} people={people} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} error={checkinError}
+            lastCheckin={lastCheckin} minsSinceLast={minsSinceLastCheckin} overdue={checkinOverdue} cycleSkipped={checkinCycleSkipped} sameAsLast={checkinSameAsLast} />
         ) : null}
         </div>
         )}

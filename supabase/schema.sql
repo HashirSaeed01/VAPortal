@@ -325,11 +325,13 @@ end $$;
 --     timeline rail on the task view.
 -- ============================================================
 create table if not exists public.checkins (
-  id          uuid primary key default gen_random_uuid(),
-  person      text not null,
-  checked_at  timestamptz not null default now(),
-  created_at  timestamptz not null default now()
+  id           uuid primary key default gen_random_uuid(),
+  person       text not null,
+  person_email text default '',
+  checked_at   timestamptz not null default now(),
+  created_at   timestamptz not null default now()
 );
+alter table public.checkins add column if not exists person_email text default '';
 
 alter table public.checkins enable row level security;
 
