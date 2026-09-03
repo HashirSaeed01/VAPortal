@@ -450,15 +450,15 @@ function buildReportText(tasks, f, labels) {
     for (const t of sorted) {
       const done = stateOf(t.status) === "Done";
       const unitTag = t.unit ? `, ${t.unit}` : "";
-      lines.push(`${t.title}${unitTag}`);
       const meta = [];
       if (t.assignedTo) meta.push(`Assigned to ${t.assignedTo}`);
       if (t.reportedBy) meta.push(`Reported by ${t.reportedBy}`);
       if (done) meta.push("Done");
       else if (t.priority) meta.push("Priority");
-      if (meta.length) lines.push(meta.join(", "));
-      if (t.notes) lines.push(t.notes.replace(/\n/g, " "));
-      lines.push("");
+      const parts = [`${t.title}${unitTag}`];
+      if (meta.length) parts.push(meta.join(", "));
+      if (t.notes) parts.push(t.notes.replace(/\n/g, " "));
+      lines.push(parts.join(" · "));
     }
     lines.push("");
   }
