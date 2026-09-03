@@ -429,12 +429,9 @@ function buildReportText(tasks, f, labels) {
   const doneCount = filtered.length - openCount;
 
   const lines = [
-    "Bay Homes — Task Report",
+    "**Bay Homes — Task Report**",
     "",
-    filterBits.length ? filterBits.join(", ") : "All tasks",
-    new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
-    `${filtered.length} task${filtered.length === 1 ? "" : "s"}, ${openCount} open, ${doneCount} done`,
-    "",
+    `${filterBits.length ? filterBits.join(", ") : "All tasks"} · ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} · ${filtered.length} task${filtered.length === 1 ? "" : "s"}, ${openCount} open, ${doneCount} done`,
     "",
   ];
   if (filtered.length === 0) lines.push("No tasks match these filters.");
@@ -445,9 +442,8 @@ function buildReportText(tasks, f, labels) {
       if (!!b.priority !== !!a.priority) return b.priority ? 1 : -1;
       return 0;
     });
-    lines.push(propertyLabel(prop, labels));
-    lines.push("");
-    for (const t of sorted) {
+    lines.push(`**${propertyLabel(prop, labels)}**`);
+    sorted.forEach((t, i) => {
       const done = stateOf(t.status) === "Done";
       const unitTag = t.unit ? `, ${t.unit}` : "";
       const meta = [];
@@ -455,11 +451,11 @@ function buildReportText(tasks, f, labels) {
       if (t.reportedBy) meta.push(`Reported by ${t.reportedBy}`);
       if (done) meta.push("Done");
       else if (t.priority) meta.push("Priority");
-      const parts = [`${t.title}${unitTag}`];
+      const parts = [`**${t.title}${unitTag}**`];
       if (meta.length) parts.push(meta.join(", "));
       if (t.notes) parts.push(t.notes.replace(/\n/g, " "));
-      lines.push(`    ${parts.join(" · ")}`);
-    }
+      lines.push(`${i + 1}) ${parts.join(" — ")}`);
+    });
     lines.push("");
   }
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
