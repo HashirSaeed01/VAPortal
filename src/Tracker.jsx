@@ -812,68 +812,63 @@ function UnitsView({ properties, propertyLabels, units, tasks, onSaveUnit, onDel
 
 /* ---------------------------- Recheck timeline --------------------------- */
 
-// Working-hours slots, 2 hours apart. Each slot fills in once someone
-// checks in during its window; the active slot pulses until then, and a
-// slot that's fully elapsed with no check-in reads as missed.
-const RECHECK_HOURS = [8, 10, 12, 14, 16, 18, 20];
-function formatHour(h) {
-  const period = h < 12 ? "AM" : "PM";
-  const hr = h % 12 === 0 ? 12 : h % 12;
-  return `${hr}${period}`;
+// A growing chain: one circle per check-in today, connected by a line whose
+// length reflects the gap since the previous one — a long line means it's
+// been a while. A final hollow circle marks the next check that's due,
+// pulsing amber once its 2-hour window opens and red once it's overdue.
+function timeAgoLabel(mins) {
+  if (mins < 60) return `${mins}m`;
+  return `${Math.round(mins / 60)}h`;
 }
 
-function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn }) {
-  const now = new Date();
-  const slots = useMemo(() => RECHECK_HOURS.map((h) => {
-    const start = new Date(); start.setHours(h, 0, 0, 0);
-    const end = new Date(start); end.setHours(end.getHours() + 2);
-    const inSlot = checkins.filter((c) => { const t = new Date(c.checked_at); return t >= start && t < end; });
-    let state;
-    if (now < start) state = "upcoming";
-    else if (inSlot.length) state = "checked";
-    else if (now < end) state = "current";
-    else state = "missed";
-    return { h, inSlot, state };
-  }), [checkins, now]);
-
-  const lastCheckin = checkins.length
-    ? checkins.reduce((a, b) => (new Date(a.checked_at) > new Date(b.checked_at) ? a : b))
-    : null;
-  const minsSince = lastCheckin ? Math.round((Date.now() - new Date(lastCheckin.checked_at).getTime()) / 60000) : null;
-  const overdue = minsSince === null || minsSince >= 120;
+function CheckInRail({ checkins, currentUser, onCheckIn, checkingIn, error }) {
+  const chain = useMemo(
+    () => [...checkins].sort((a, b) => new Date(a.checked_at) - new Date(b.checked_at)),
+    [checkins]
+  );
+  const now = Date.now();
+  const last = chain[chain.length - 1];
+  const minsSinceLast = last ? Math.round((now - new Date(last.checked_at).getTime()) / 60000) : null;
+  const overdue = minsSinceLast === null || minsSinceLast >= 120;
+  const dueSoon = !overdue && minsSinceLast >= 90;
+  const sameAsLast = !!(last && currentUser && last.person === currentUser);
+  const lineHeight = (mins) => Math.max(28, Math.min(96, mins * 1.1));
 
   return (
-    <aside className="hidden xl:flex fixed right-4 top-24 bottom-6 w-44 flex-col rounded-xl border border-slate-700 bg-slate-900 p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-300"><Clock size={13} /> Recheck timeline</div>
-      <div className={"mb-3 rounded-md px-2 py-1.5 text-xs font-semibold " + (overdue ? "bg-red-500/15 text-red-400" : "bg-emerald-500/15 text-emerald-400")}>
-        {lastCheckin
-          ? `Last check ${minsSince < 60 ? `${minsSince}m` : `${Math.round(minsSince / 60)}h`} ago — ${lastCheckin.person}`
-          : "No checks yet today"}
+    <aside className="hidden xl:flex sticky top-24 w-48 shrink-0 flex-col self-start rounded-xl border border-slate-700 bg-slate-900 p-4">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-300"><Clock size={13} /> Recheck timeline</div>
+      <div className="mb-4 text-xs font-medium text-slate-500">
+        {last ? `Last check ${timeAgoLabel(minsSinceLast)} ago` : "No checks yet today"}
       </div>
-      <div className="relative min-h-0 flex-1 overflow-y-auto pl-1">
-        <div className="absolute left-[9px] top-1 bottom-1 w-px bg-slate-700" />
-        {slots.map((s) => (
-          <div key={s.h} className="relative flex items-start gap-2 py-1.5">
-            <span className={
-              "relative z-10 mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 " +
-              (s.state === "checked" ? "border-emerald-400 bg-emerald-400"
-                : s.state === "current" ? "border-amber-400 bg-amber-400/40 animate-pulse"
-                : s.state === "missed" ? "border-slate-500 bg-transparent"
-                : "border-slate-700 bg-transparent")
-            } />
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold text-slate-300">{formatHour(s.h)}</div>
-              {s.inSlot.length ? (
-                <div className="truncate text-[10px] text-emerald-300">{s.inSlot.map((c) => c.person).join(", ")}</div>
-              ) : null}
-            </div>
+
+      <div className="flex flex-1 flex-col items-center overflow-y-auto py-1">
+        {chain.map((c, i) => (
+          <div key={c.id} className="flex flex-col items-center">
+            {i > 0 ? <div className="w-px bg-slate-700" style={{ height: lineHeight(Math.round((new Date(c.checked_at) - new Date(chain[i - 1].checked_at)) / 60000)) }} /> : null}
+            <span className="h-4 w-4 shrink-0 rounded-full border-2 border-emerald-400 bg-emerald-400" />
+            <div className="mt-1.5 max-w-[7rem] truncate text-center text-xs font-semibold text-slate-200">{c.person}</div>
+            <div className="text-[10px] text-slate-500">{new Date(c.checked_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>
           </div>
         ))}
+
+        {/* Next check due */}
+        <div className="flex flex-col items-center">
+          {chain.length ? <div className="w-px bg-slate-700" style={{ height: lineHeight(minsSinceLast) }} /> : null}
+          <span className={
+            "h-4 w-4 shrink-0 rounded-full border-2 " +
+            (overdue ? "border-red-500 animate-pulse" : dueSoon ? "border-amber-400 animate-pulse" : "border-slate-600")
+          } />
+          <div className={"mt-1.5 text-center text-xs font-semibold " + (overdue ? "text-red-400" : dueSoon ? "text-amber-400" : "text-slate-500")}>
+            {overdue ? "Recheck now" : "Next due"}
+          </div>
+        </div>
       </div>
-      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn}
-        className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
+
+      {error ? <div className="mb-2 text-center text-[11px] font-medium text-red-400">{error}</div> : null}
+      <button type="button" onClick={onCheckIn} disabled={!currentUser || checkingIn || sameAsLast}
+        className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-white px-2 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-200 disabled:opacity-40">
         {checkingIn ? <Loader2 className="animate-spin" size={13} /> : <CheckCircle2 size={13} />}
-        {currentUser ? `Check in as ${currentUser}` : "Set your name to check in"}
+        {sameAsLast ? "Waiting on someone else" : currentUser ? `Check in as ${currentUser}` : "Sign in to check in"}
       </button>
     </aside>
   );
@@ -1073,6 +1068,7 @@ export default function Tracker({ session, onSignOut }) {
   const currentUser = useMemo(() => nameFromEmail(session?.user?.email), [session]);
   const [checkins, setCheckins] = useState([]);
   const [checkingIn, setCheckingIn] = useState(false);
+  const [checkinError, setCheckinError] = useState(null);
 
   // Picking a different property starts the category drill-down over.
   useEffect(() => { setContactCategory(null); setChecklistInput(""); }, [propFilter]);
@@ -1163,6 +1159,16 @@ export default function Tracker({ session, onSignOut }) {
 
   const checkIn = async () => {
     if (!currentUser) return;
+    setCheckinError(null);
+    // The point of the timeline is a second set of eyes — the same person
+    // checking in twice in a row doesn't prove anything got re-reviewed.
+    const lastToday = checkins.length
+      ? checkins.reduce((a, b) => (new Date(a.checked_at) > new Date(b.checked_at) ? a : b))
+      : null;
+    if (lastToday && lastToday.person === currentUser) {
+      setCheckinError("You already checked in last — have someone else check in next.");
+      return;
+    }
     setCheckingIn(true);
     const { error } = await supabase.from("checkins").insert({ person: currentUser });
     if (error) setError(error.message + " (has the checkins table migration been run yet?)");
@@ -1557,7 +1563,7 @@ export default function Tracker({ session, onSignOut }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 space-y-6">
+      <main className="mx-auto max-w-[90rem] px-4 py-6">
         {error ? (
           <div className="flex items-center justify-between rounded-lg bg-red-500/15 px-4 py-3 text-sm font-medium text-red-300 ring-1 ring-inset ring-red-500/40">
             <span>{error}</span>
@@ -1573,11 +1579,8 @@ export default function Tracker({ session, onSignOut }) {
               onSaveUnit={saveUnit} onDeleteUnit={removeUnit} savingUnit={savingUnit} />
           )
         ) : (
-        <>
-
-        {!loading ? (
-          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} />
-        ) : null}
+        <div className="flex items-start gap-6">
+        <div className="min-w-0 flex-1 max-w-6xl space-y-6">
 
         {!loading && upcomingKeyDates.length > 0 ? (
           <div className="rounded-lg bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-300 ring-1 ring-inset ring-amber-500/40">
@@ -1890,7 +1893,11 @@ export default function Tracker({ session, onSignOut }) {
             </footer>
           </>
         )}
-        </>
+        </div>
+        {!loading ? (
+          <CheckInRail checkins={checkins} currentUser={currentUser} onCheckIn={checkIn} checkingIn={checkingIn} error={checkinError} />
+        ) : null}
+        </div>
         )}
       </main>
 
