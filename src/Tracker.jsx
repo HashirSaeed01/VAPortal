@@ -475,7 +475,7 @@ function ReportModal({ tasks, contacts, properties, propertyLabels, onClose }) {
   const [property, setProperty] = useState("all");
   const [assignedTo, setAssignedTo] = useState("all");
   const [reportedBy, setReportedBy] = useState("all");
-  const [state, setState] = useState("all");
+  const [state, setState] = useState("open");
   const [copied, setCopied] = useState(false);
 
   const applyPreset = (key) => {
